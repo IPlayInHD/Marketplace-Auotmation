@@ -57,7 +57,14 @@ warnings, reduced reach).
 | Page-open rate above 40% | Proceed as specified |
 | 20–40% | Proceed, but treat higher-value items as the launch segment |
 | Below 20% | Stop. Re-open the transport decision (D-02) before building |
-| Code-entry rate below 80% of page opens | The gate design is wrong; fix `BUYER-004`/`BUYER-009` before building it |
+| Code-entry completion below 50% of page opens | Stop, or fundamentally rework the concept. Re-open the transport decision (D-02) before building |
+| Code-entry completion 50%–79% of page opens | Revise the workflow — `BUYER-004`, `BUYER-009`, preview content, disclosure wording — and run the validation again before building |
+| Code-entry completion 80% or higher of page opens | Clean validation pass on the gate; proceed |
+
+The code-entry bands reconcile the thresholds previously stated here and in
+`business/RISK_REGISTER.md` §4 (D-17, C-09). They describe how Slice 0 data is read.
+They are not Slice 0 evidence: actual validation data from running this slice is still
+required, and `PLAN-007` stands.
 
 **Out of scope.** Everything. This slice writes no production code.
 
@@ -118,14 +125,22 @@ says plainly when it does not have something. No negotiation yet.
 |---|---|
 | Backend | Context assembly from the buyer-safe projection; structured proposed action; the guardrail engine with the answering subset of checks (G-05, G-06, G-07, G-08, G-09, G-14); egress redaction; `AIInteraction` cost recording |
 | Frontend | Live conversation, holding states, escalation notice |
-| AI | Answering and intent extraction on a cheap model tier |
+| AI | Answering and intent extraction on a cheap model tier, in shadow mode (`PLAN-002`) until its exit criteria are met |
 | Security | Prompt injection layering; buyer text delimited as data |
+| Safety gate | The minimum controls that must exist, with passing tests, before any model output reaches a real buyer (`PLAN-008`): authorization checks on every route the agent path touches (`AUTH-220` to `AUTH-225`); deterministic guardrails between model and effect (`AI-203`, `AI-204`); model-call budgets and the circuit breaker (`OPS-410` to `OPS-414`, `OPS-661` to `OPS-669`); time and turn limits (`G-13`, `OPS-752`, `SEC-502`); the logging prohibitions and the metrics of `engineering/OPERATIONS.md` §4 and §5 (`OPS-790`, `OPS-793`); both kill switches (`AI-222`); buyer-safe output validation (`AI-212`, `SEC-138`); shadow mode (`AI-221`, `OPS-028`) |
 | Tests | Guardrail unit tests; grounding refusal path |
 | Evals | The CONVERSATION suite in `ai/EVAL_STRATEGY.md`, blocking in CI |
 
 **Acceptance.** Asked for an unstated specification, the agent says it does not have it
 confirmed and offers to ask the seller. It never infers. Injection attempts produce
-denials, and every denial is logged as a fixture candidate.
+denials, and every denial is logged as a fixture candidate. No model output reaches a
+real buyer before every control in the Safety gate row exists and has passed its test.
+
+`PLAN-002` Shadow mode runs for the first 500 real buyer conversations: the agent
+proposes every reply and a human approves before it sends. It is tedious for a week and
+it shows you the true failure distribution before a customer finds it. It starts here,
+with this slice, because this is the first slice in which a model reply could reach a
+buyer (`AI-221`, `OPS-028`). Its exit threshold is set before the run begins (`Q-EV-01`).
 
 **Out of scope.** Prices, counters, offers, approval.
 
@@ -215,13 +230,17 @@ authorization.
 
 **Outcome.** You can run this without watching it.
 
-Analytics from `product/INVENTORY_AND_SALES.md`; the observability, alerting, runbooks
-and cost controls in `engineering/OPERATIONS.md`; per-seller cost budgets and the
-circuit breaker; the eval scoreboard; shadow mode and kill switches.
+Analytics from `product/INVENTORY_AND_SALES.md`; the remaining observability, alerting,
+runbooks and cost-control practice in `engineering/OPERATIONS.md`; per-seller plan
+budgets and overage handling; the eval scoreboard; restore drills and the operational
+tooling that is not in Slice 3's Safety gate.
 
-`PLAN-002` Shadow mode runs for the first 500 real buyer conversations: the agent
-proposes every reply and a human approves before it sends. It is tedious for a week and
-it shows you the true failure distribution before a customer finds it.
+The minimum safety controls — authorization checks, deterministic guardrails, model-call
+budgets and the circuit breaker, time and turn limits, logging and metrics, both kill
+switches, buyer-safe output validation and shadow mode — are not built here. They are
+gated into Slice 3 by `PLAN-008`, because they must exist before the first real AI
+execution, not after it. This slice hardens and extends them; it does not introduce
+them.
 
 ---
 
@@ -240,3 +259,6 @@ intelligence. See `product/MASTER_PRODUCT_SPEC.md` §13 and §14.
 `PLAN-005` Slice 5 does not start until the guardrail engine has ≥200 unit tests.
 `PLAN-006` Slice 2 does not ship until every test in `PUBLIC_ACCESS_SECURITY.md` §8 passes.
 `PLAN-007` Slice 1 does not start until Slice 0 has produced a decision.
+`PLAN-008` Slice 3 does not let a model reply reach any real buyer until every control in
+its Safety gate row exists and has passed its test, and until the `PLAN-002` shadow-mode
+exit threshold has been set (`Q-EV-01`). Advanced operational tooling stays in Slice 8.

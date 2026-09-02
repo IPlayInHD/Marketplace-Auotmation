@@ -390,8 +390,9 @@ any buyer's critical path.
 | Metering | Each call writes an `AIInteraction` row with purpose `enhancement`, tokens, cost and validator verdict, so per-seller cost is attributable (`NFR-006`). |
 | Caching | Identical input for the same listing and tone returns the stored result rather than re-calling. |
 
-`LIST-067` The specific model and tier are a later decision, recorded when the stack is
-chosen (`D-08`). No document may name a provider as a requirement.
+`LIST-067` The specific model and tier are a later decision, recorded when the model
+provider is chosen (`Q-10`; D-17 records the stack and keeps the provider open). No
+document may name a provider as a requirement.
 `LIST-068` Expected cost per listing is a fraction of the conversation cost for the same
 listing. If it is not, the implementation is wrong: the prompt is carrying context it
 does not need.

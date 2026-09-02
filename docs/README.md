@@ -72,6 +72,7 @@ through D-13 and D-16.
 | **Deciding what to build next** | `planning/MVP_ROADMAP.md` · `business/RISK_REGISTER.md` |
 | **Pricing or packaging** | `business/BUSINESS_MODEL.md` · `business/UNIT_ECONOMICS.md` |
 | **Writing marketing copy** | `business/POSITIONING.md` (see the prohibited-claims table) |
+| **Backend implementation** | `decisions/DECISION_LOG.md` D-17 · `architecture/ARCHITECTURE.md` · `engineering/SYSTEM_REQUIREMENTS.md` · `engineering/OPERATIONS.md` |
 
 ---
 

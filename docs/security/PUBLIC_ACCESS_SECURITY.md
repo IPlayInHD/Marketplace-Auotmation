@@ -110,7 +110,8 @@ buyer session, by construction rather than by check.
 `SEC-040` Access codes never appear in logs, error messages, analytics or audit payloads.
 `SEC-041` Session tokens never appear in URLs or logs.
 `SEC-042` Buyer message content is not written to application logs. Transcripts live in
-their own store with their own retention.
+their own store — a dedicated schema inside the single database (`OPS-719`) — with their
+own retention.
 `SEC-043` Failed-attempt records store a hashed client identifier, not raw IP, beyond the
 short window needed for rate limiting.
 

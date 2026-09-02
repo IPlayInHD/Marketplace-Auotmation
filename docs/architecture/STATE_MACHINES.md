@@ -151,11 +151,12 @@ stateDiagram-v2
 
 | Rule | Statement |
 |---|---|
-| SM-A-01 | The approval row is written before execution is attempted, so an interrupted execution is recoverable. |
+| SM-A-01 | The approval header is written before execution is attempted, so an interrupted execution is recoverable. |
 | SM-A-02 | Execution asserts, inside one transaction: listing available, approval pending, material-terms hash unchanged. |
-| SM-A-03 | Any failed assertion aborts and moves the approval to `INVALIDATED` with a reason. |
+| SM-A-03 | Any failed assertion aborts and records an `INVALIDATED` status event with a reason. |
 | SM-A-04 | The agent is permitted to communicate acceptance only after `EXECUTED`. |
 | SM-A-05 | Execution is idempotent on the client-supplied key. A retry returns the original outcome. |
+| SM-A-06 | Every transition in this machine is recorded by appending a status event to an insert-only approval header. The current status is derived from the events. The header is never updated and no event is ever deleted (`OPS-705`, `DM-11`). |
 
 ## 7. Deal and handoff
 

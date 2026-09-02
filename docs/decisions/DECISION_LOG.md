@@ -259,3 +259,94 @@ Ranking that is shown to a seller must be explainable; "this buyer looks risky" 
 
 **Consequences.** Offer ranking uses explicit, explainable factors only — amount, timing,
 conditions. The platform never fabricates competing interest to pressure a buyer.
+
+---
+
+## D-17 — Backend engineering baseline: TypeScript modular monolith on PostgreSQL
+**Date** 2026-09-02 · **Status** Proposed · **Supersedes** D-08 on acceptance
+
+**Decision.** The backend is built in TypeScript with strict compiler settings on
+Node.js 24 LTS, as one modular monolith shipped as one container image with two entry
+points, `web` and `worker`, from the same codebase. Fastify is the HTTP framework.
+PostgreSQL is the single relational source of truth, accessed through Kysely, with
+explicit SQL migrations and row-level security on seller-owned data. pg-boss is the
+provisional PostgreSQL-backed job queue. The authenticated seller dashboard is React
+with Vite; the public buyer pages are server-rendered. Exact runtime and dependency
+versions are pinned during implementation, not here.
+
+Acceptance is conditional: this entry moves from Proposed to Accepted only when a
+technical spike has proved pg-boss's transactional enqueueing, retry behaviour,
+redelivery and restricted-role operation. Until then D-08 stands and no document may
+assume more than this entry states.
+
+| Area | Baseline |
+|---|---|
+| Language and runtime | TypeScript, `strict` compiler settings; Node.js 24 LTS. Exact versions pinned at implementation. |
+| Application structure | Modular monolith (`D-01`). One deployable container image. Two entry points from one codebase: `web` and `worker` (`OPS-510`). Separate buyer-facing and seller-facing route trees with separate middleware (`ARCH-002`). Module boundaries enforced by tooling, not convention. No microservices for the MVP. |
+| Backend framework | Fastify. Zod schemas at every untrusted input and output boundary. Domain modules expose no unrestricted internal object to a public route. Buyer responses are produced only from explicit buyer-safe projections (`SEC-020`, `OPS-724`, `SEC-138`). |
+| Database | PostgreSQL, the single relational source of truth (`OPS-701`). Kysely for typed access. Explicit, forward-only SQL migrations (`OPS-714`). Row-level security for seller-owned data (`SEC-100`). Separate migration/owner role and runtime role: the runtime role owns no table, cannot bypass row-level security and holds no schema-changing permission (`OPS-716`). Row-level security fails closed when tenant context is missing. Tenant context is transaction-scoped and is reset before a pooled connection is reused (`SEC-101`). |
+| Background jobs | pg-boss, provisionally. Jobs are enqueued in the same transaction as the domain write they belong to (`OPS-722`). pg-boss installation and upgrades run only through the migration role or a controlled CLI step; the runtime role performs no DDL. The dependency version is pinned. Its single-maintainer risk is `RISK-24`. |
+| User interfaces | React with Vite for the authenticated seller dashboard. Server-rendered buyer pages for the public buyer experience (`BUYER-021`, `SEC-131`). Buyer pages stay usable when no worker is available (`OPS-770`). |
+| Storage | An S3-compatible object-storage abstraction for listing images and attachments; development may use a local adapter. "Own store" (`OPS-719`, `DATA-104`) means a dedicated PostgreSQL schema or logical ownership boundary inside the one approved database, not a second database, unless a later decision explicitly changes it. |
+| Authentication and security | Opaque, database-backed seller sessions (`AUTH-205`, `AUTH-207`, `AUTH-219`). Argon2id for password hashing (`AUTH-201`). Secure, HttpOnly, SameSite cookies. CSRF protection where applicable (`SEC-310`, `SEC-311`). Rate limiting, session rotation, expiry, revocation and audit events (`AUTH-204`, `AUTH-206` to `AUTH-209`, `AUTH-217`). The authentication library is not selected here; see below. |
+| Observability and testing | Pino structured logging (`OPS-563`). OpenTelemetry-compatible tracing and metrics (`OPS-578`). Vitest for unit and integration tests. Testcontainers for PostgreSQL integration and security tests. Architecture-boundary tests with dependency-cruiser or an equivalent enforceable tool (`OPS-702`, `SEC-138`, `AI-204`). Deterministic guardrail tests (`AI-205`) and the AI evaluation suites of `ai/EVAL_STRATEGY.md`. |
+| Deployment and cost | The smallest reliable deployment: at least one `web` process and one `worker` process. Replica counts are not fixed in advance and grow only from measured demand. Hosting provider, model provider, and email, push and other notification providers remain undecided. Infrastructure is selected only after a provider-specific cost model exists (`BIZ-270`, `OPS-443`). No operating-cost figure is claimed without one. |
+
+**Why.** One language across the buyer surface, the seller dashboard, the worker, the
+migrations and the eval harness keeps a two-person team's system comprehensible to one
+person (`RISK-20`). Every MVP-gated requirement in `engineering/SYSTEM_REQUIREMENTS.md`
+maps to a concrete mechanism in this baseline. PostgreSQL row-level security, role
+separation and a PostgreSQL-backed queue satisfy the one-database, no-broker rule
+(`D-01`, `ARCH-001`) without a second datastore. Server-rendered buyer pages are the only
+shape that satisfies `BUYER-021` and `SEC-131`. The documentation set was written to
+survive this choice, and it does: module boundaries, invariants and requirements are
+unchanged by it.
+
+**Consequences.** `CLAUDE.md`, `architecture/ARCHITECTURE.md` and
+`engineering/SYSTEM_REQUIREMENTS.md` no longer describe the stack as undecided; they
+cite this entry. Hosting, model provider, notification providers and the authentication
+library are recorded as open questions (`Q-09` to `Q-12` in
+`product/MASTER_PRODUCT_SPEC.md` §18) and are not decided by this entry. The
+authentication library is a separate security-reviewed implementation decision or
+spike. The pg-boss spike is a precondition of acceptance. `RISK-24` is added to
+`business/RISK_REGISTER.md`. The cost model in `business/UNIT_ECONOMICS.md` is
+recomputed when a provider is named, not now.
+
+**Conflict resolutions recorded with this entry.**
+
+| Conflict | Resolution |
+|---|---|
+| C-01 — append-only approvals versus mutable approval status | A `SellerApproval` is stored as an insert-only approval header plus insert-only approval status events, one per transition of `architecture/STATE_MACHINES.md` §6. The current status is derived from those events and is never written back onto the header. The original approval record is never mutated (`OPS-705`, `SM-A-06`, `DM-11`). |
+| C-08 — meaning of dedicated storage | Dedicated ownership means a dedicated PostgreSQL schema or domain boundary inside the single approved database. Object storage holds binary objects such as images only. The architecture diagram, `OPS-719` and the backup and restore drill in `engineering/OPERATIONS.md` §11 are aligned to this reading. |
+| C-09 — Slice 0 code-entry thresholds | The 50% and 80% figures are reconciled as bands on code-entry completion as a share of page opens: below 50%, stop or fundamentally rework the concept; 50%–79%, revise the workflow and run validation again; 80% or higher, a clean pass permitting progression. The bands describe how Slice 0 data is read. They are not Slice 0 evidence; actual validation data is still required and `PLAN-007` stands. |
+
+C-03 (`Q-02` shown as open after D-02 accepted Option C), C-04 (master-spec scope list
+worded as a build order) and C-05 (minimum safety controls scheduled after the first
+real AI execution) are documentation corrections made alongside this entry, in
+`product/MASTER_PRODUCT_SPEC.md` §12 and §18 and `planning/MVP_ROADMAP.md` Slice 3,
+Slice 8 and `PLAN-008`. None changes product scope.
+
+**Rejected alternatives.** A Go monolith: stronger runtime structural guarantees, rejected
+for the second toolchain a React dashboard would add and for cgo-based image
+processing. A Python/Django monolith: rejected because `AI-200` and `OPS-724` demand a
+type-level guarantee Python cannot give, because row-level security sits awkwardly on
+its connection model, and because its administrative surface is exactly what `SEC-373`
+forbids. Stateless or hosted-identity session tokens used directly as sessions: fail
+`AUTH-205`, `AUTH-207`, `AUTH-209` and `AUTH-219`. A Redis-, RabbitMQ- or cloud-queue-backed
+job system: fails `ARCH-001` and `OPS-701`. A client-rendered buyer surface: fails
+`BUYER-021`, `FX-04` and `SEC-131`. Fixing two web and two worker replicas at launch:
+rejected as unmeasured cost.
+
+**Deliberately not decided here.** Initial launch jurisdiction (`Q-07`); buyer-code
+pre-filling (`Q-03`); cross-device buyer-session continuation (`Q-04`); buyer email
+collection (`Q-05`); model provider (`Q-10`); hosting provider and region (`Q-09`);
+notification providers (`Q-11`); AI turn and cost budgets (`Q-AG-02`); shadow-mode exit
+criteria (`Q-EV-01`); live-versus-stub CI evaluation policy (`Q-EV-02`); the
+authentication library (`Q-12`).
+
+**Reconsideration triggers.** The pg-boss spike fails any of its four proofs. Slice 0
+returns a stop decision and D-02 is reopened. The `OPS-757` load test or the `OPS-756`
+plan assertions show row-level security or the queue cannot meet the p95 targets at
+target row counts. `Q-07` resolves with a localisation requirement that forces a
+regional split (`DATA-325`). Any proposal for a second deployable, a broker or a second
+datastore.

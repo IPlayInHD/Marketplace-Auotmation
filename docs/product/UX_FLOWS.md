@@ -12,7 +12,8 @@ are referenced, never restated. Agent authority is defined in
 
 **Not a visual design.** This document specifies what each screen must contain, what it
 must not contain, and the order of steps. It specifies no technology, no framework and no
-component library (D-08).
+component library; the implementation baseline is D-17 and this document does not depend
+on it.
 
 ---
 

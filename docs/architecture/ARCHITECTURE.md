@@ -1,8 +1,10 @@
 # Architecture Overview
 
 **Status:** Canonical for module boundaries and system-level data flow.
-**Technology stack is not decided.** See `decisions/DECISION_LOG.md` D-08. Nothing in
-this document depends on a specific framework, language or cloud provider.
+**Technology baseline.** The backend baseline is recorded in
+`decisions/DECISION_LOG.md` D-17 (Proposed; supersedes D-08 on acceptance). Nothing in
+this document depends on it: the module boundaries, data flow and failure posture hold
+whatever implements them. Hosting and cloud provider remain undecided (`Q-09`).
 
 ---
 
@@ -19,6 +21,11 @@ extracted later if load or team size ever justifies it.
 `ARCH-001` Do not introduce a second deployable, a message broker beyond a simple work
 queue, or a second datastore without a recorded decision.
 
+`ARCH-015` One container image, two entry points — `web` and `worker` — from the same
+codebase (`OPS-510`, D-17). Conversation transcripts live in a dedicated schema of the
+one relational database, not in object storage and not in a second datastore
+(`OPS-719`). Object storage holds binary objects such as images only.
+
 ## 2. Two applications, one system
 
 ```mermaid
@@ -33,7 +40,7 @@ flowchart LR
     MOD[Modules §3]
   end
   DB[(Relational DB)]
-  OBJ[(Object storage<br/>images, transcripts)]
+  OBJ[(Object storage<br/>images)]
   Q[[Work queue]]
   LLM{{Model provider}}
   BP --> MOD
@@ -135,14 +142,14 @@ sequenceDiagram
   participant C as Conversations
   S->>AP: approve(offer_version_id, terms_hash, idempotency_key)
   AP->>AP: authenticate, check ownership
-  AP->>AP: write approval PENDING_EXECUTION
+  AP->>AP: write approval header (insert-only) and PENDING_EXECUTION event
   AP->>L: begin transaction and lock listing row
   L-->>AP: status
   AP->>AP: assert available, pending, hash matches
   AP->>L: set listing PENDING_SALE
   AP->>O: set offer APPROVED and supersede competitors
   AP->>AU: audit events
-  AP->>AP: commit and set approval EXECUTED
+  AP->>AP: commit and record EXECUTED status event
   AP->>C: enqueue acceptance message via outbox
   C-->>S: confirmation
 ```
@@ -202,7 +209,7 @@ dead-letter queue with an alert. A buyer message must still receive a holding re
 
 | Failure | Behaviour |
 |---|---|
-| Model provider unavailable | Retry with backoff; a secondary provider is optional, not required (D-08) and if adopted must be contracted on the same processor terms — see `security/DATA_AND_PRIVACY.md`; otherwise holding reply plus seller notification |
+| Model provider unavailable | Retry with backoff; a secondary provider is optional, not required (D-08, `Q-10`) and if adopted must be contracted on the same processor terms — see `security/DATA_AND_PRIVACY.md`; otherwise holding reply plus seller notification |
 | Guardrail denies repeatedly | Escalate after 2 regenerations |
 | Malformed model output | 2 deterministic retries, then escalate |
 | Cost budget breached | Degrade model tier, then holding mode; alert seller and operator |

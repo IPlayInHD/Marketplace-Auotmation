@@ -16,9 +16,10 @@ from photographs, no marketplace scraping or messaging automation, no autonomous
 acceptance (`R-01` to `R-09`, `D-09` to `D-14`). No requirement below may be read as
 permitting any of them. `AI-220` makes their absence itself testable.
 
-**No stack assumption.** Technology, framework, datastore product and cloud provider are
-undecided (`D-08`). Requirements below describe capabilities and observable behaviour,
-never a product.
+**Stack baseline.** The backend baseline is recorded in `decisions/DECISION_LOG.md`
+D-17 (Proposed; supersedes D-08 on acceptance). Requirements below still describe
+capabilities and observable behaviour, never a product, so they hold whatever implements
+them. Hosting and cloud provider remain undecided (`Q-09`).
 
 ---
 
@@ -64,7 +65,7 @@ schema-level assertion), **build** (a check that fails the build or startup), **
 | OPS-702 | No module reads another module's tables. Cross-module access is through an explicit interface (`ARCH` §3). | build: schema-ownership map checked against query call sites | MVP |
 | OPS-703 | Monetary amounts are stored as integer minor units with an explicit ISO 4217 currency (`DM-07`). No floating-point money column exists. | build: schema scan rejects float or decimal-typed money columns; unit: fractional input rejected | MVP |
 | OPS-704 | An arithmetic or comparison operation between two amounts of different currency raises rather than coerces. | unit | MVP |
-| OPS-705 | Messages, offers, offer versions, approvals and audit events are append-only. No update or delete path exists for them in application code or in the granted database role. | build: role privileges asserted; integration: update attempt fails | MVP |
+| OPS-705 | Messages, offers, offer versions, approval headers, approval status events and audit events are append-only. No update or delete path exists for them in application code or in the granted database role. Current approval status is derived from the status events; the approval header is never mutated (`SM-A-06`, `DM-11`). | build: role privileges asserted; integration: update attempt fails | MVP |
 | OPS-706 | Listing content, seller policy and offer terms are versioned and immutable; a change appends a version (`DM-06`). | integration | MVP |
 | OPS-707 | A lifecycle transition not drawn in `architecture/STATE_MACHINES.md` is rejected at the data layer, not only in application code. | integration: each illegal transition attempted per state machine | MVP |
 | OPS-708 | `Message.sequence_number` is unique per conversation and strictly increasing. Ordering is by sequence, never by timestamp. | integration: concurrent inserts produce no gap-free duplicate; unit for ordering | MVP |
@@ -75,10 +76,10 @@ schema-level assertion), **build** (a check that fails the build or startup), **
 | OPS-713 | Timestamps are stored with an explicit time zone in UTC. | build: schema scan | MVP |
 | OPS-714 | Schema migrations are forward-only and run in CI against a database loaded with production-shaped volumes before they may run in production. | build | MVP |
 | OPS-715 | No personal data and no secret appears in a primary key, a URL path or a query string. | build: route inventory reviewed against a forbidden-field list | MVP |
-| OPS-716 | The application database role cannot create, alter or drop schema objects. Migrations run under a separate role. | build: privilege assertion | MVP |
+| OPS-716 | The application database role cannot create, alter or drop schema objects, owns no table, and cannot bypass the data-layer tenant isolation of `SEC-100`. Migrations, including queue-library installation and upgrades, run under a separate role or a controlled CLI step (D-17). | build: privilege assertion | MVP |
 | OPS-717 | Data is encrypted at rest in the database and in object storage, and in transit on every hop including internal ones. | integration: connection asserts TLS; manual: storage configuration recorded | MVP |
 | OPS-718 | Object storage is private by default. Images are served through signed, expiring URLs or an authenticated proxy, never from a world-readable path. | integration: direct unsigned fetch is refused | MVP |
-| OPS-719 | Conversation transcripts live in their own store with their own retention, separate from application logs (`SEC-042`, `DATA-104`). | contract; integration | MVP |
+| OPS-719 | Conversation transcripts live in their own store — a dedicated schema or ownership boundary inside the single relational database of `OPS-701`, never a second datastore — with their own retention, separate from application logs (`SEC-042`, `DATA-104`, D-17). | contract; integration | MVP |
 | OPS-720 | Every write to a consequential entity records the request id that caused it. | integration | MVP |
 | OPS-721 | Every list endpoint paginates with a hard maximum page size and a server-side query timeout. | integration: oversized page request is clamped, not honoured | MVP |
 | OPS-722 | Notifications and buyer-visible agent messages are emitted through a transactional outbox; nothing is sent for a transaction that rolled back (`ARCH-011`). | integration: forced rollback emits nothing | MVP |
@@ -140,8 +141,8 @@ schema-level assertion), **build** (a check that fails the build or startup), **
 
 | ID | Requirement | Verification | Gate |
 |---|---|---|---|
-| SEC-100 | Tenant isolation is enforced at the data layer in addition to application filtering. A query that omits its tenant predicate fails rather than returning another seller's rows (`NFR-007`, `SEC-030`). | integration: for each seller-owned table, an unpredicated query errors | MVP |
-| SEC-101 | The tenant context is established once per request or per job from the authenticated principal, and is not passed as a mutable argument through the call stack. | build: single construction site | MVP |
+| SEC-100 | Tenant isolation is enforced at the data layer in addition to application filtering. A query that omits its tenant predicate fails rather than returning another seller's rows (`NFR-007`, `SEC-030`). The enforcement fails closed: with no tenant context present, no seller-owned row is readable or writable. | integration: for each seller-owned table, an unpredicated query errors | MVP |
+| SEC-101 | The tenant context is established once per request or per job from the authenticated principal, and is not passed as a mutable argument through the call stack. Where database connections are pooled, the context is transaction-scoped and is reset before a connection is reused. | build: single construction site | MVP |
 | SEC-102 | Every background job carries a tenant context. A job with none cannot touch a tenant-owned table. | integration: injected contextless job fails | MVP |
 | SEC-103 | Analytics are computed per tenant. No cross-tenant aggregate, benchmark, ranking or comparison reaches a seller surface. | contract: analytics query shape; integration | MVP |
 | SEC-104 | Object-storage keys are unguessable and every read is access-checked against the tenant. Knowing a key is not sufficient to read an object. | integration: cross-tenant key fetch refused | MVP |
@@ -229,9 +230,9 @@ test list.
 | AUTH-240 | A `SellerApproval` references exactly one `OfferVersion` and stores a hash of the material terms captured at approval time (`D-06`, `AUTH-INV-05`, `DM-05`). | contract; integration | MVP |
 | AUTH-241 | The material-terms hash covers exactly amount, currency, included items, delivery or pickup mode, and every condition attached to the offer (`GLOSSARY` Material Terms, `NEG-017`). Changing any one changes the hash; changing a non-material field does not. | unit: hash coverage matrix over every field | MVP |
 | AUTH-242 | The hash stored with the approval is computed from the same terms rendering that was displayed to the seller, not from a re-read of the row. | integration: interposed mutation between render and submit is detected | MVP |
-| AUTH-243 | The approval row is written before execution is attempted, so an interrupted execution is recoverable (`SM-A-01`). | integration: crash injected between write and execute; recovery completes or invalidates, never silently drops | MVP |
+| AUTH-243 | The approval header is written before execution is attempted, so an interrupted execution is recoverable (`SM-A-01`). | integration: crash injected between write and execute; recovery completes or invalidates, never silently drops | MVP |
 | AUTH-244 | Execution asserts, inside one transaction: the listing is available, the approval is `PENDING_EXECUTION`, and the material-terms hash still matches (`SM-A-02`, `AUTH-INV-10`). | integration: each assertion violated in turn | MVP |
-| AUTH-245 | Any failed assertion aborts the transaction, moves the approval to `INVALIDATED` with a reason, and tells the seller why. The agent is never told to accept (`SM-A-03`, `AUTH-005`). | integration; eval `AP-02`, `AP-05`, `AP-06`, `AP-09` | MVP |
+| AUTH-245 | Any failed assertion aborts the transaction, records an `INVALIDATED` status event with a reason, and tells the seller why. The agent is never told to accept (`SM-A-03`, `AUTH-005`). | integration; eval `AP-02`, `AP-05`, `AP-06`, `AP-09` | MVP |
 | AUTH-246 | A new offer version supersedes the previous one and invalidates any approval against it (`SM-O-02`, `AUTH-INV-06`). | integration; eval `AP-05` | MVP |
 | AUTH-247 | `AWAITING_SELLER` is the only state from which an approval may be requested (`SM-O-04`). | integration: approval attempted from every other state | MVP |
 | AUTH-248 | An offer below the minimum price never reaches `AWAITING_SELLER` through agent action alone. The seller may still view and accept it explicitly (`SM-O-05`). | eval `NG-03`; integration | MVP |
@@ -240,7 +241,7 @@ test list.
 | AUTH-251 | Two simultaneous approvals on one listing produce exactly one winner. The loser receives an explicit "just sold" outcome, never a silent failure (`AUTH-INV-11`, eval `AP-07`). | integration: concurrent execution repeated under contention | MVP |
 | AUTH-252 | The agent's acceptance message is enqueued only through the outbox and only after the approval reaches `EXECUTED` (`SM-A-04`, `AUTH-INV-07`). | integration; eval `OPS-015` | MVP |
 | AUTH-253 | No agent message containing commitment language exists in a conversation before an `EXECUTED` approval covers it (`G-09`). | eval: `must_not_match` commitment set on every conversation case (`OPS-004`) | MVP |
-| AUTH-254 | An approval that is not executed within its window moves to `EXPIRED` and cannot execute afterwards (`STATE_MACHINES.md` §6). | integration | MVP |
+| AUTH-254 | An approval that is not executed within its window receives an `EXPIRED` status event and cannot execute afterwards (`STATE_MACHINES.md` §6). | integration | MVP |
 | AUTH-255 | A seller may reverse an approval before execution; the reversal is audited and the agent communicates nothing. | integration | MVP |
 | AUTH-256 | Every approval records the seller id, the authenticated session reference, the offer version id, the terms hash, the policy version in force and the idempotency key (`DOMAIN_MODEL.md` SellerApproval). | contract; integration | MVP |
 | AUTH-257 | The offer amount is taken from the structured extraction and re-parsed and validated deterministically. It is never read from prose (`AI-031` offer-extraction row). | unit; integration | MVP |
@@ -419,10 +420,14 @@ prose is a summary of them.
 
 | ID | Question | Where it bites |
 |---|---|---|
-| `Q-01` | Technology stack (`D-08`) | Fixes the concrete form of `OPS-701` to `OPS-717`, and the data-layer mechanism behind `SEC-100` |
+| `Q-01` | Technology stack — backend baseline recorded in D-17 (Proposed) | The concrete form of `OPS-701` to `OPS-717` and the mechanism behind `SEC-100` (PostgreSQL row-level security) follow D-17 once accepted. Hosting (`Q-09`), model provider (`Q-10`), notification providers (`Q-11`) and the authentication library (`Q-12`) remain open |
 | `Q-03` | Whether the access code is pre-filled from the URL | Changes the abuse-control assumptions behind `SEC-134` |
 | `Q-04` | Cross-device buyer session resume | Would add requirements under `SEC-110` to `SEC-119`; any mechanism must not become a bearer credential (`BUYER-016`) |
 | `Q-05` | Whether any buyer-facing email is ever sent | Blocks `SEC-136` and `INT-102` from changing |
 | `Q-06` | Free-tier limits | Fixes the thresholds behind `AUTH-226` and the per-seller budgets of `engineering/OPERATIONS.md` §10 |
 | `Q-07` | Jurisdictions at launch | Fixes the retention periods `DATA-100` enforces (`security/DATA_AND_PRIVACY.md` §12) |
+| `Q-09` | Hosting provider and region | Fixes the concrete form of `OPS-717`, `OPS-772`, `SEC-333` and `SEC-350`, and the region recorded under `DATA-324` |
+| `Q-10` | Model provider | Fixes `INT-105` and `INT-107`, and the rates behind `business/UNIT_ECONOMICS.md` |
+| `Q-11` | Seller-notification providers | Fixes the delivery side of `INT-102` and `INT-108` |
+| `Q-12` | Authentication library | A security-reviewed implementation decision or spike (D-17). Must satisfy `AUTH-200` to `AUTH-219` |
 | `Q-AG-02` | Default turn and cost budget per conversation (`G-13`) | Fixes the thresholds behind `AI-216` |

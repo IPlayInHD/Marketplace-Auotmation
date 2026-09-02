@@ -166,7 +166,8 @@ dropped and the agent never invents a way around a denial.
 2. The target `OfferVersion` is current and in `AWAITING_SELLER`.
 3. The material-terms hash presented to the seller matches the stored version.
 4. An idempotency key is supplied.
-5. The approval row is written with decision, actor, hash, policy version.
+5. The approval header is written (insert-only) with decision, actor, hash, policy
+   version, and a `PENDING_EXECUTION` status event is recorded (`SM-A-06`).
 6. An `AuditEvent` is written in the same transaction.
 
 ### 9.2 Executing an approval
@@ -180,8 +181,9 @@ Inside one transaction:
 7. Write audit events.
 8. Enqueue the agent's acceptance message through the outbox.
 
-`AUTH-005` If any assertion fails the transaction aborts, the approval is marked
-`INVALIDATED`, and the seller is told why. The agent is never told to accept.
+`AUTH-005` If any assertion fails the transaction aborts, an `INVALIDATED` status event
+is recorded against the approval, and the seller is told why. The agent is never told to
+accept.
 
 ### 9.3 Invalidation triggers
 A new offer version supersedes the old · buyer withdraws · listing sold, cancelled or

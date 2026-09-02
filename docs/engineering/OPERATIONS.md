@@ -10,7 +10,8 @@ logging rules on the public surface and is referenced here, not restated.
 happens after merge.
 
 **No cloud provider is named.** Hosting, managed services and regions are undecided
-(`D-08`). This document describes required **capabilities** — a managed relational
+(`D-08`, `Q-09`; the backend baseline D-17 defers hosting). This document describes
+required **capabilities** — a managed relational
 database with point-in-time recovery, an object store, a scheduler, a log store, a
 metrics store, a secret store — and the cost-control practices that apply to any of
 them. The first implementation slice records the choice as a superseding decision.
@@ -68,6 +69,7 @@ the same build with different entry points.
 | OPS-518 | Deploy during the working day, both operators awake, never on a Friday evening, and never while the other operator is unreachable. This is a rule, not a preference: a two-person team has no second responder. |
 | OPS-519 | A release records: the build id, the migrations included, the prompt and prompt-version changes included, the model or tier changes included, and the eval scoreboard delta (`EVAL_STRATEGY.md` §7). |
 | OPS-520 | A change to a prompt, a tier or a routing rule is a release like any other. It is not configuration to be edited in a console. |
+| OPS-521 | The smallest reliable deployment is at least one `web` process and one `worker` process. Replica counts are not fixed in advance; they follow measured demand (D-17). |
 
 ## 3. What the operator sees first
 
@@ -551,7 +553,7 @@ failure of proportion.
 |---|---|
 | Relational database | Continuous or point-in-time recovery with a recovery point no worse than 15 minutes (`OPS-772`) |
 | Object storage | Versioning enabled, deletion protection on, and a lifecycle policy that matches the retention in `security/DATA_AND_PRIVACY.md` |
-| Transcript store | Backed up on the same schedule as the database; it holds the dispute-defence record (`SM-S-03`) |
+| Transcript schema | Part of the relational database and covered by its point-in-time recovery; called out because it holds the dispute-defence record (`SM-S-03`, `OPS-719`) |
 | Secret store | Backed up separately, with its own access control. A restore that cannot decrypt is not a restore |
 | Configuration | In version control; an environment is reproducible without a backup (`OPS-503`) |
 
@@ -568,7 +570,7 @@ failure of proportion.
 |---|---|
 | 1. Provision a clean environment from version-controlled configuration | `OPS-503` |
 | 2. Restore the database to a point in time 15 minutes before a chosen incident moment | RPO |
-| 3. Restore object storage and the transcript store to the same point | Cross-store consistency |
+| 3. Restore object storage to the same point as the database, which already contains the transcript schema | Cross-store consistency |
 | 4. Restore secrets and confirm the application starts and can decrypt | `OPS-696` |
 | 5. Run the integration suite against the restored system | Correctness, not just liveness |
 | 6. Verify a sample: one listing, one conversation, one approval, one audit chain reconstructs (`OPS-785`) | The data that matters survived |

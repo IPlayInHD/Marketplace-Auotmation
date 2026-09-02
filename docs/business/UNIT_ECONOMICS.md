@@ -14,7 +14,7 @@ by `EVAL_STRATEGY.md`, `PRD.md`, `INVENTORY_AND_SALES.md` and `UX_FLOWS.md`.)
 ## 1. Purpose, scope and honesty statement
 
 `BIZ-250` **Every rate in this document is an ILLUSTRATIVE PLACEHOLDER. No provider has
-been chosen (`D-08`), no rate has been negotiated, and no number below is a quotation, a
+been chosen (`D-08`; D-17 keeps the provider open as `Q-10`), no rate has been negotiated, and no number below is a quotation, a
 forecast or a commitment.** The document's value is the *structure* - the work units, the
 formulas and the levers - which stays correct when the placeholders are replaced.
 
@@ -197,7 +197,7 @@ the whole cost-control design exists to bound** (`T-04`, `RISK-07`, `BIZ-061`).
 
 | Lever | Mechanism | Assumption | Input-token saving | Notes |
 |---|---|---|---|---|
-| **Prompt caching** | The per-turn base context is stable within a conversation, so a cached prefix is billed at `k_cache` | 80% of `T_base` cacheable, cached portion at 10% of the input rate | **-34%** (37,800 to 24,840) | Largest single lever. Requires the prompt to be built prefix-stable: fixed content first, volatile content last. That is an architectural constraint on context assembly, not a runtime optimisation. Availability is provider-dependent (`D-08`). |
+| **Prompt caching** | The per-turn base context is stable within a conversation, so a cached prefix is billed at `k_cache` | 80% of `T_base` cacheable, cached portion at 10% of the input rate | **-34%** (37,800 to 24,840) | Largest single lever. Requires the prompt to be built prefix-stable: fixed content first, volatile content last. That is an architectural constraint on context assembly, not a runtime optimisation. Availability is provider-dependent (`Q-10`). |
 | **History truncation** | Keep the last K turns verbatim plus a rolling summary; drop the middle | K = 8 turns, 250-token rolling summary | -6% at 15 turns, **-43% at 40 turns** | Converts the N^2 term into a linear one beyond turn K. Worth almost nothing on short conversations and decisive on long ones - exactly the tail that matters. Constrained by `AI-002` and `G-05`: a dropped fact must not become an invented one. Summaries must preserve every stated offer and condition, or offer extraction degrades. |
 | **Image resizing** | Serve bounded derivatives, never originals | 400 KB vs 3 MB per served image | 7.5x on serving, not on tokens | Independent of the model entirely. Also improves `NFR-001` and the mobile-first requirement (`BUYER-020`). |
 | Caching + truncation together | | | **-40% at 15 turns** | Not additive; caching acts on the base, truncation on the history. |
@@ -303,7 +303,7 @@ is not.
 
 | Category | Status | Confidence | Replace with |
 |---|---|---|---|
-| All model rates (§2) | **Assumption. Placeholder.** | None - no provider chosen (`D-08`) | Contracted rates |
+| All model rates (§2) | **Assumption. Placeholder.** | None - no provider chosen (`D-08`, `Q-10`) | Contracted rates |
 | Storage, egress, notification, infrastructure rates | **Assumption. Placeholder.** | Low | Actual invoices |
 | Token counts (§3) | **Assumption.** Most likely to be wrong. | Low | Measured `AIInteraction` rows |
 | `s_esc` = 0.40 escalation share | **Assumption.** | Low | Measured from the price-mention pre-pass |
@@ -318,7 +318,7 @@ is not.
 | Prices and allowances (§6.1) | **Hypothesis** (`BIZ-040`), not validated with a customer | None | Willingness-to-pay research (`BIZ-092`) |
 
 `BIZ-270` The whole model must be recomputed, not adjusted, at each of these points: when
-a provider and tier are chosen (`D-08`); when the first 100 real conversations exist; when
+a provider and tier are chosen (`Q-10`); when the first 100 real conversations exist; when
 prices are set; before any allowance is published; and at each provider rate change.
 `BIZ-093` makes this a precondition for the negotiation slice.
 

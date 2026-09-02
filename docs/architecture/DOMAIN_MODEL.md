@@ -120,6 +120,12 @@ captured at approval time, decision (`APPROVE`, `DECLINE`, `COUNTER`, `IGNORE`),
 authenticated session or credential reference, an idempotency key, and status
 (`PENDING_EXECUTION`, `EXECUTED`, `INVALIDATED`, `EXPIRED`).
 
+The record is insert-only. It is stored as an approval header, written once when the
+seller acts, plus insert-only approval status events, one per transition of
+`architecture/STATE_MACHINES.md` §6. The current status is derived from those events and
+is never written back onto the header. Neither application code nor the runtime database
+role updates or deletes either (`OPS-705`, `SM-A-06`, D-17).
+
 Nothing else in the system may create authorization. See `ai/POLICY_AND_AUTHORIZATION.md`.
 
 ### Deal / Handoff
@@ -156,3 +162,4 @@ metering and unit economics.
 | DM-08 | Access codes are stored hashed. |
 | DM-09 | A `Listing` may have at most one active `PublicListingAccess` and at most one `ACTIVE` access code. |
 | DM-10 | The buyer-safe projection is computed from approved content and policy, never assembled ad hoc at the model boundary. |
+| DM-11 | Approval status is derived from insert-only status events. The approval header is never mutated. |

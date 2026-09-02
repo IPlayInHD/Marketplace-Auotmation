@@ -308,7 +308,8 @@ against the rules that applied when it was generated.
 
 `AI-031` Cheap-first. Escalate a turn to a higher tier only on defined triggers. Tiers
 are named `cheap`, `mid` and `premium`; the specific models are a later decision
-(`D-08`), and no provider is a requirement.
+(`D-08`; D-17 records the stack and keeps the provider open as `Q-10`), and no provider
+is a requirement.
 
 | Task | Default tier | Escalation trigger | Notes |
 |---|---|---|---|

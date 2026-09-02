@@ -49,7 +49,7 @@ Three options were considered.
 |---|---|---|
 | A | `ourplatform.com/chat` + code | Shortest to say aloud. No listing context before the gate, so the page is a bare code box — reads as phishing. Rejected as the default. |
 | B | `ourplatform.com/buy` + code | Same problem as A. |
-| **C** | `ourplatform.com/l/<opaque-public-id>` + 6-digit confirmation code | **Recommended.** The page can render the listing before the gate, which is what makes it look legitimate. The code confirms intent and scopes the session. |
+| **C** | `ourplatform.com/l/<opaque-public-id>` + 6-digit confirmation code | **Accepted as the default (D-02).** The page can render the listing before the gate, which is what makes it look legitimate. The code confirms intent and scopes the session. |
 
 `BUYER-001` Option C is the default. A and B remain available as a fallback if a
 marketplace disallows path-bearing URLs but permits a bare domain.
