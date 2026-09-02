@@ -1,0 +1,32 @@
+{
+  "name": "reseller-backend-foundation-spike",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Disposable acceptance spike for decision D-17. Not production code. Delete when D-17 is resolved.",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0 <25"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "audit": "npm audit",
+    "web": "node src/web/main.ts"
+  },
+  "dependencies": {
+    "fastify": "5.12.1",
+    "kysely": "0.29.5",
+    "pg": "8.23.0",
+    "pg-boss": "12.29.0",
+    "pino": "10.3.1",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@testcontainers/postgresql": "12.1.0",
+    "@types/node": "24.13.3",
+    "@types/pg": "8.23.1",
+    "testcontainers": "12.1.0",
+    "typescript": "6.0.3",
+    "vitest": "4.1.11"
+  }
+}
