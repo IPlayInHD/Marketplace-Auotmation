@@ -307,10 +307,10 @@ and highest-risk.**
 
 ## 18. Unresolved questions
 
-`Q-01` Technology stack — the backend baseline is recorded in D-17 (**Proposed**;
-supersedes D-08 on acceptance, which is conditional on the pg-boss spike). Hosting
-provider, model provider and notification providers remain undecided; see `Q-09` to
-`Q-11`.
+`Q-01` ~~Technology stack — undecided (D-08).~~ **RESOLVED** by decision D-17
+(Accepted 2026-09-03; supersedes D-08), the approved backend architecture baseline.
+Hosting provider, model provider, notification providers and the authentication library
+remain open; see `Q-09` to `Q-12`.
 `Q-02` ~~Final buyer URL shape — Option C recommended; see `product/BUYER_ACCESS_FLOW.md`.~~
 **RESOLVED** by decision D-02: Option C is accepted and is the default (`BUYER-001`);
 Options A and B remain fallbacks. The Slice 0 stop branch in `planning/MVP_ROADMAP.md`

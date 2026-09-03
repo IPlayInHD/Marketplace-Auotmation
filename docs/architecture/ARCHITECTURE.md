@@ -1,8 +1,8 @@
 # Architecture Overview
 
 **Status:** Canonical for module boundaries and system-level data flow.
-**Technology baseline.** The backend baseline is recorded in
-`decisions/DECISION_LOG.md` D-17 (Proposed; supersedes D-08 on acceptance). Nothing in
+**Technology baseline.** The approved backend architecture baseline is
+`decisions/DECISION_LOG.md` D-17 (Accepted 2026-09-03; supersedes D-08). Nothing in
 this document depends on it: the module boundaries, data flow and failure posture hold
 whatever implements them. Hosting and cloud provider remain undecided (`Q-09`).
 

@@ -60,9 +60,10 @@ judgment.
 - Ledgers (messages, offers, approvals, audit events) are append-only.
 - Every consequential action needs an audit event and an idempotency key.
 - New or changed AI behaviour requires evals before merge. See `docs/ai/EVAL_STRATEGY.md`.
-- The backend baseline is recorded in `docs/decisions/DECISION_LOG.md` (D-17,
-  Proposed; supersedes D-08 on acceptance): TypeScript on Node.js, Fastify, PostgreSQL
-  with Kysely, pg-boss provisionally, React with Vite for the seller dashboard, and
+- The approved backend architecture baseline is `docs/decisions/DECISION_LOG.md`
+  D-17 (Accepted 2026-09-03; supersedes D-08): TypeScript on Node.js, Fastify,
+  PostgreSQL with Kysely, pg-boss under the operating rule in
+  `docs/engineering/OPERATIONS.md` §2.1, React with Vite for the seller dashboard, and
   server-rendered buyer pages. Do not assume anything beyond it. Hosting, model
   provider, notification providers and the authentication library remain undecided;
   raise each as a decision.
