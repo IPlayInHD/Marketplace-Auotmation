@@ -71,6 +71,18 @@ the same build with different entry points.
 | OPS-520 | A change to a prompt, a tier or a routing rule is a release like any other. It is not configuration to be edited in a console. |
 | OPS-521 | The smallest reliable deployment is at least one `web` process and one `worker` process. Replica counts are not fixed in advance; they follow measured demand (D-17). |
 
+### 2.1 pg-boss operating rule
+
+The job queue is pg-boss (D-17, accepted on the evidence of `spikes/backend-foundation/`).
+It is a single-maintainer dependency (`RISK-24`) that installs its own schema, so it is
+operated under one rule, enforced in the build and in the database rather than by habit.
+
+| ID | Rule |
+|---|---|
+| OPS-522 | **Pinned and reviewed.** pg-boss is pinned to an exact version in the dependency manifest and the lockfile is committed (`SEC-380`); builds install from the lockfile only. No automatic dependency upgrade — by bot, by version range or through a transitive dependency — may change the pg-boss version. A candidate upgrade is a reviewed change: its changelog and every schema migration it carries are read before it is proposed, and the change record cites both. The dependency's health — release activity, open security issues, maintainer responsiveness — is reviewed at least monthly with the risk register (`BIZ-204`, `RISK-24`) and again before every upgrade. |
+| OPS-523 | **Migration and runtime separation.** The pg-boss schema is installed and upgraded only by the migration/owner role, through the pg-boss CLI (`create`, `migrate`, with `plans --dry-run` for review) or an equivalent controlled migration step, never by a running `web` or `worker` process. Runtime instances start with schema migration disabled (`migrate: false`), so an instance that meets a pending migration refuses to start instead of migrating. Runtime roles own no pg-boss object and hold no DDL privilege (`OPS-716`); their access is DML only, and the schema-version table is read-only to them. Queue topology — creating, deleting or repartitioning a queue, and changing a queue's retry, expiry, heartbeat or retention policy — is a migration under this rule: applied by the migration role and reviewed like any other. Before a schema upgrade runs: a backup exists and its recovery has been planned (`OPS-695` to `OPS-699`); a rollback or forward-recovery plan has been written and tested against a copy; and the complete foundation spike suite (`spikes/backend-foundation/`, 54 tests) has passed against the candidate version on the production PostgreSQL major version. |
+| OPS-524 | **Reconsideration triggers.** pg-boss is reconsidered as a decision, not patched around, when any of these occurs: maintenance stops or security fixes go unmerged; an unresolved security issue stands against the pinned version; PostgreSQL coupling becomes an operational bottleneck (`OPS-543`, `OPS-757`); upgrade safety can no longer be demonstrated by the procedure in `OPS-523`; or a queue behaviour the system relies on — transactional enqueue, retry with backoff, expiry and heartbeat redelivery, dead-lettering — stops being supported. The response is a superseding entry in `decisions/DECISION_LOG.md`. The queue sits behind one internal interface so that a replacement PostgreSQL-backed queue is a bounded change (`ARCH-001`, `OPS-701`). |
+
 ## 3. What the operator sees first
 
 `OPS-525` One dashboard, one screen, answering four questions in this order: **is the

@@ -64,7 +64,10 @@ warnings, reduced reach).
 The code-entry bands reconcile the thresholds previously stated here and in
 `business/RISK_REGISTER.md` §4 (D-17, C-09). They describe how Slice 0 data is read.
 They are not Slice 0 evidence: actual validation data from running this slice is still
-required, and `PLAN-007` stands.
+required, and `PLAN-007` stands. At the acceptance of the backend baseline D-17
+(2026-09-03) no Slice 0 validation evidence exists. Production code entry remains blocked
+by `PLAN-007` until it does; accepting an architecture decision is not validation
+evidence.
 
 **Out of scope.** Everything. This slice writes no production code.
 
@@ -262,3 +265,7 @@ intelligence. See `product/MASTER_PRODUCT_SPEC.md` §13 and §14.
 `PLAN-008` Slice 3 does not let a model reply reach any real buyer until every control in
 its Safety gate row exists and has passed its test, and until the `PLAN-002` shadow-mode
 exit threshold has been set (`Q-EV-01`). Advanced operational tooling stays in Slice 8.
+`PLAN-009` The engineering follow-ups recorded at the acceptance of D-17
+(`decisions/DECISION_LOG.md` D-17, "Follow-ups recorded at acceptance") are non-blocking
+for that decision, but each applicable one is complete before the production capability
+it names launches, and none is described as tested until it has run.

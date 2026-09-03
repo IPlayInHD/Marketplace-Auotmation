@@ -17,7 +17,7 @@ acceptance (`R-01` to `R-09`, `D-09` to `D-14`). No requirement below may be rea
 permitting any of them. `AI-220` makes their absence itself testable.
 
 **Stack baseline.** The backend baseline is recorded in `decisions/DECISION_LOG.md`
-D-17 (Proposed; supersedes D-08 on acceptance). Requirements below still describe
+D-17 (Accepted 2026-09-03; supersedes D-08). Requirements below still describe
 capabilities and observable behaviour, never a product, so they hold whatever implements
 them. Hosting and cloud provider remain undecided (`Q-09`).
 
@@ -76,7 +76,7 @@ schema-level assertion), **build** (a check that fails the build or startup), **
 | OPS-713 | Timestamps are stored with an explicit time zone in UTC. | build: schema scan | MVP |
 | OPS-714 | Schema migrations are forward-only and run in CI against a database loaded with production-shaped volumes before they may run in production. | build | MVP |
 | OPS-715 | No personal data and no secret appears in a primary key, a URL path or a query string. | build: route inventory reviewed against a forbidden-field list | MVP |
-| OPS-716 | The application database role cannot create, alter or drop schema objects, owns no table, and cannot bypass the data-layer tenant isolation of `SEC-100`. Migrations, including queue-library installation and upgrades, run under a separate role or a controlled CLI step (D-17). | build: privilege assertion | MVP |
+| OPS-716 | The application database role cannot create, alter or drop schema objects, owns no table, and cannot bypass the data-layer tenant isolation of `SEC-100`. Migrations, including queue-library installation and upgrades, run under a separate role or a controlled CLI step, under the pg-boss operating rule of `engineering/OPERATIONS.md` §2.1 (`OPS-522` to `OPS-524`; D-17). | build: privilege assertion | MVP |
 | OPS-717 | Data is encrypted at rest in the database and in object storage, and in transit on every hop including internal ones. | integration: connection asserts TLS; manual: storage configuration recorded | MVP |
 | OPS-718 | Object storage is private by default. Images are served through signed, expiring URLs or an authenticated proxy, never from a world-readable path. | integration: direct unsigned fetch is refused | MVP |
 | OPS-719 | Conversation transcripts live in their own store — a dedicated schema or ownership boundary inside the single relational database of `OPS-701`, never a second datastore — with their own retention, separate from application logs (`SEC-042`, `DATA-104`, D-17). | contract; integration | MVP |
@@ -420,7 +420,7 @@ prose is a summary of them.
 
 | ID | Question | Where it bites |
 |---|---|---|
-| `Q-01` | Technology stack — backend baseline recorded in D-17 (Proposed) | The concrete form of `OPS-701` to `OPS-717` and the mechanism behind `SEC-100` (PostgreSQL row-level security) follow D-17 once accepted. Hosting (`Q-09`), model provider (`Q-10`), notification providers (`Q-11`) and the authentication library (`Q-12`) remain open |
+| `Q-01` | Technology stack — backend baseline recorded in D-17 (Accepted 2026-09-03) | The concrete form of `OPS-701` to `OPS-717` and the mechanism behind `SEC-100` (PostgreSQL row-level security) follow D-17. Hosting (`Q-09`), model provider (`Q-10`), notification providers (`Q-11`) and the authentication library (`Q-12`) remain open |
 | `Q-03` | Whether the access code is pre-filled from the URL | Changes the abuse-control assumptions behind `SEC-134` |
 | `Q-04` | Cross-device buyer session resume | Would add requirements under `SEC-110` to `SEC-119`; any mechanism must not become a bearer credential (`BUYER-016`) |
 | `Q-05` | Whether any buyer-facing email is ever sent | Blocks `SEC-136` and `INT-102` from changing |

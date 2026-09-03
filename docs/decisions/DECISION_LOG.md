@@ -127,7 +127,7 @@ verified per channel and may change without notice.
 ---
 
 ## D-08 — Technology stack deliberately undecided
-**Date** 2026-09-02 · **Status** Open
+**Date** 2026-09-02 · **Status** Superseded by D-17 (accepted 2026-09-03); retained unchanged as the historical record
 
 **Decision.** No language, framework, cloud or datastore is specified by this
 documentation set beyond "one relational database".
@@ -263,20 +263,21 @@ conditions. The platform never fabricates competing interest to pressure a buyer
 ---
 
 ## D-17 — Backend engineering baseline: TypeScript modular monolith on PostgreSQL
-**Date** 2026-09-02 · **Status** Proposed · **Supersedes** D-08 on acceptance
+**Date** 2026-09-02 · **Status** Accepted (2026-09-03) · **Supersedes** D-08
 
 **Decision.** The backend is built in TypeScript with strict compiler settings on
 Node.js 24 LTS, as one modular monolith shipped as one container image with two entry
 points, `web` and `worker`, from the same codebase. Fastify is the HTTP framework.
 PostgreSQL is the single relational source of truth, accessed through Kysely, with
 explicit SQL migrations and row-level security on seller-owned data. pg-boss is the
-provisional PostgreSQL-backed job queue. The authenticated seller dashboard is React
+PostgreSQL-backed job queue, provisional until the acceptance spike (see **Acceptance**).
+The authenticated seller dashboard is React
 with Vite; the public buyer pages are server-rendered. Exact runtime and dependency
 versions are pinned during implementation, not here.
 
-Acceptance is conditional: this entry moves from Proposed to Accepted only when a
-technical spike has proved pg-boss's transactional enqueueing, retry behaviour,
-redelivery and restricted-role operation. Until then D-08 stands and no document may
+Acceptance was conditional on a technical spike proving pg-boss's transactional
+enqueueing, retry behaviour, redelivery and restricted-role operation. That spike ran and
+passed; the record is under **Acceptance** below. D-08 is superseded. No document may
 assume more than this entry states.
 
 | Area | Baseline |
@@ -285,7 +286,7 @@ assume more than this entry states.
 | Application structure | Modular monolith (`D-01`). One deployable container image. Two entry points from one codebase: `web` and `worker` (`OPS-510`). Separate buyer-facing and seller-facing route trees with separate middleware (`ARCH-002`). Module boundaries enforced by tooling, not convention. No microservices for the MVP. |
 | Backend framework | Fastify. Zod schemas at every untrusted input and output boundary. Domain modules expose no unrestricted internal object to a public route. Buyer responses are produced only from explicit buyer-safe projections (`SEC-020`, `OPS-724`, `SEC-138`). |
 | Database | PostgreSQL, the single relational source of truth (`OPS-701`). Kysely for typed access. Explicit, forward-only SQL migrations (`OPS-714`). Row-level security for seller-owned data (`SEC-100`). Separate migration/owner role and runtime role: the runtime role owns no table, cannot bypass row-level security and holds no schema-changing permission (`OPS-716`). Row-level security fails closed when tenant context is missing. Tenant context is transaction-scoped and is reset before a pooled connection is reused (`SEC-101`). |
-| Background jobs | pg-boss, provisionally. Jobs are enqueued in the same transaction as the domain write they belong to (`OPS-722`). pg-boss installation and upgrades run only through the migration role or a controlled CLI step; the runtime role performs no DDL. The dependency version is pinned. Its single-maintainer risk is `RISK-24`. |
+| Background jobs | pg-boss (provisional until the acceptance spike; accepted with this entry). Jobs are enqueued in the same transaction as the domain write they belong to (`OPS-722`). pg-boss installation and upgrades run only through the migration role or a controlled CLI step; the runtime role performs no DDL. The dependency version is pinned. Its single-maintainer risk is `RISK-24`. |
 | User interfaces | React with Vite for the authenticated seller dashboard. Server-rendered buyer pages for the public buyer experience (`BUYER-021`, `SEC-131`). Buyer pages stay usable when no worker is available (`OPS-770`). |
 | Storage | An S3-compatible object-storage abstraction for listing images and attachments; development may use a local adapter. "Own store" (`OPS-719`, `DATA-104`) means a dedicated PostgreSQL schema or logical ownership boundary inside the one approved database, not a second database, unless a later decision explicitly changes it. |
 | Authentication and security | Opaque, database-backed seller sessions (`AUTH-205`, `AUTH-207`, `AUTH-219`). Argon2id for password hashing (`AUTH-201`). Secure, HttpOnly, SameSite cookies. CSRF protection where applicable (`SEC-310`, `SEC-311`). Rate limiting, session rotation, expiry, revocation and audit events (`AUTH-204`, `AUTH-206` to `AUTH-209`, `AUTH-217`). The authentication library is not selected here; see below. |
@@ -308,7 +309,8 @@ cite this entry. Hosting, model provider, notification providers and the authent
 library are recorded as open questions (`Q-09` to `Q-12` in
 `product/MASTER_PRODUCT_SPEC.md` §18) and are not decided by this entry. The
 authentication library is a separate security-reviewed implementation decision or
-spike. The pg-boss spike is a precondition of acceptance. `RISK-24` is added to
+spike. The pg-boss spike was the precondition of acceptance and has run (see
+**Acceptance**). `RISK-24` is added to
 `business/RISK_REGISTER.md`. The cost model in `business/UNIT_ECONOMICS.md` is
 recomputed when a provider is named, not now.
 
@@ -325,6 +327,44 @@ worded as a build order) and C-05 (minimum safety controls scheduled after the f
 real AI execution) are documentation corrections made alongside this entry, in
 `product/MASTER_PRODUCT_SPEC.md` §12 and §18 and `planning/MVP_ROADMAP.md` Slice 3,
 Slice 8 and `PLAN-008`. None changes product scope.
+
+**Acceptance.** Accepted on 2026-09-03 on the evidence of the backend-foundation spike
+committed at `08d2d86d5de95832914c4d7f89c09d73f77c75c6` (`spikes/backend-foundation/`, a
+disposable spike, not product code; its README carries the full procedure).
+
+| Item | Evidence |
+|---|---|
+| Clean reproduction | Reproduced on 2026-09-03 from the committed lockfile in a fresh detached worktree at that commit: `npm ci --ignore-scripts` with the lockfile unchanged, `tsc --noEmit` clean, the complete suite 54 of 54 against a real PostgreSQL container, `npm audit` with no findings, no committed file changed, the container removed afterwards |
+| Runtime and versions | Node.js 24.20.0 (LTS); PostgreSQL 16.15 (`postgres:16-alpine`, digest recorded in the spike README); pg-boss 12.29.0; TypeScript 6.0.3, Fastify 5.12.1, Kysely 0.29.5, Zod 4.5.4, Pino 10.3.1, Vitest 4.1.11, Testcontainers 12.1.0, all pinned exactly with a committed lockfile |
+| Tests | 54 of 54 passing in 9 files: twice at the evidence commit with shuffled file and test order, and once more in the clean reproduction |
+| Transactional enqueue and rollback | The domain row and its job are written by one transaction on one connection (the `xmin` of both rows equals the transaction id); commit keeps both, rollback keeps neither; a non-transactional control is shown not to be atomic (`OPS-722`) |
+| Runtime without DDL | pg-boss installed only by the migration role through its CLI; the worker runs with `migrate: false`, processes jobs and runs maintenance with a byte-identical catalog before and after; it cannot create, alter, drop or reindex queue objects; with migrations pending it refuses to start, and a misconfigured `migrate: true` instance is stopped by the role (`OPS-716`) |
+| Row-level security and pooled-connection isolation | Runtime roles are not superusers, cannot bypass RLS and own nothing; seller A cannot read, update, delete or insert across tenants; missing or invalid tenant context exposes no row; `FORCE` applies to the owner; a reused pooled connection carries no tenant identity, and the test is shown to detect the leak it guards against (`SEC-100`, `SEC-101`) |
+| Exception retry and crash/lease recovery | A failing handler is retried per the queue policy with an observable attempt count and ends `completed`, or `failed` once the policy is exhausted; a worker process killed with SIGKILL mid-job is recovered by another instance after the attempt expires; a job whose heartbeat stops is failed by the monitor and redelivered. Killing a process while it is actively heartbeating was not run (follow-up 1 below) |
+| Database-enforced idempotency | A pg-boss redelivery after a lost acknowledgement and four concurrent duplicate deliveries produce exactly one side effect, enforced by a `UNIQUE` constraint, not by application memory (`OPS-730`, `ARCH-013`) |
+| Buyer-safe projection | Strict input validation rejects unknown and mass-assignment keys; the projection is a distinct constructed type that cannot hold a protected key at compile time and rejects spread-in fields at serialisation; the server-rendered buyer page and `/health` answer with no worker present (`SEC-020`, `SEC-021`, `OPS-724`, `OPS-770`) |
+
+pg-boss is no longer provisional. It is operated under the rule in
+`engineering/OPERATIONS.md` §2.1 (`OPS-522` to `OPS-524`), and `RISK-24` records the
+remaining dependency risk. Accepting this entry authorises the baseline, not production
+implementation: `planning/MVP_ROADMAP.md` `PLAN-007` still blocks Slice 1 until Slice 0
+has produced a decision, and no Slice 0 validation evidence exists at the time of
+acceptance.
+
+**Follow-ups recorded at acceptance.** Non-blocking for this decision. None of them has
+been tested; each applicable item is complete before the production capability it names
+launches (`PLAN-009`).
+
+| # | Follow-up | Complete before |
+|---|---|---|
+| 1 | Kill a worker process while it is actively heartbeating and verify recovery | The first production worker (Slice 3) |
+| 2 | Design public buyer-listing tenant resolution: how a public listing id resolves to a tenant before row-level-security context exists | Production buyer routes (Slice 2) |
+| 3 | Test PgBouncer transaction-pooling compatibility, if PgBouncer is introduced | Any introduction of PgBouncer |
+| 4 | Test graceful `web` and `worker` deployment draining (`OPS-515`, `OPS-773`) | The first production deploy (Slice 1) |
+| 5 | Define CI migration execution and failure recovery (`OPS-513`, `OPS-714`) | The first production migration (Slice 1) |
+| 6 | Run performance tests at representative row and job volumes (`OPS-756`, `OPS-757`) | General availability |
+| 7 | Establish formatter and linter choices for production code | The first production code (Slice 1) |
+| 8 | Select an authentication library through a separate security-reviewed decision (`Q-12`) | Seller authentication (Slice 1) |
 
 **Rejected alternatives.** A Go monolith: stronger runtime structural guarantees, rejected
 for the second toolchain a React dashboard would add and for cgo-based image
@@ -344,7 +384,7 @@ notification providers (`Q-11`); AI turn and cost budgets (`Q-AG-02`); shadow-mo
 criteria (`Q-EV-01`); live-versus-stub CI evaluation policy (`Q-EV-02`); the
 authentication library (`Q-12`).
 
-**Reconsideration triggers.** The pg-boss spike fails any of its four proofs. Slice 0
+**Reconsideration triggers.** Any pg-boss trigger named in `OPS-524`. Slice 0
 returns a stop decision and D-02 is reopened. The `OPS-757` load test or the `OPS-756`
 plan assertions show row-level security or the queue cannot meet the p95 targets at
 target row counts. `Q-07` resolves with a localisation requirement that forces a

@@ -30,7 +30,11 @@ should ever be imported by, application code.
 | 9 | Pino structured logging with request correlation, job id, attempt, outcome and error category; secrets and protected seller fields are redacted at any depth | `test/logging.test.ts` | PASS |
 
 Two complete runs from clean containers, with shuffled file and test order, passed
-54 of 54 tests. See the final spike report in the pull request or session for the logs.
+54 of 54 tests at the evidence commit. On 2026-09-03 the spike was reproduced
+independently from the committed lockfile in a fresh detached worktree at that commit
+(`npm ci --ignore-scripts` with the lockfile unchanged, type-check clean, 54 of 54 against
+a real PostgreSQL container, `npm audit` clean, no committed file changed) as the
+acceptance gate for D-17; see `docs/decisions/DECISION_LOG.md` D-17.
 
 ## Prerequisites
 
@@ -49,6 +53,34 @@ blocked by policy but Google's mirror was permitted:
 ```
 export TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX=mirror.gcr.io/
 ```
+
+## PostgreSQL test image
+
+The suite ran, and D-17 was accepted, against this image:
+
+| Field | Value |
+|---|---|
+| Registry | `docker.io` is the canonical source. In the acceptance environment the image was pulled through the Google pull-through mirror `mirror.gcr.io`, because Docker Hub blob downloads were refused by the egress policy |
+| Repository | `library/postgres` |
+| Tag | `16-alpine` |
+| Manifest digest | `sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685` as reported by `docker image inspect` (RepoDigests) after the pull from `mirror.gcr.io` on 2026-09-02; image created 2026-08-13; `linux/amd64` |
+| PostgreSQL | 16.15 (`postgres --version` inside the image; `PG_MAJOR=16`) |
+
+A tag is mutable: `16-alpine` will point at a different image after the next upstream
+rebuild, so the tag alone does not guarantee an identical future test environment. The
+digest does. `test/helpers/database.ts` reads `SPIKE_POSTGRES_IMAGE`, so CI can pin the
+approved digest without changing any file:
+
+```
+export SPIKE_POSTGRES_IMAGE=postgres@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+```
+
+With `TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX` also set, Testcontainers rewrites that
+reference to `<prefix>postgres@sha256:...`. Both forms were exercised in the acceptance
+environment: a database test file passed 5 of 5 with the pinned digest. The digest could
+not be checked against Docker Hub itself from that environment; re-verify it there when
+the mirror is not in use. When the pin is moved to a newer image, re-run the whole suite
+and record the new digest and PostgreSQL version here.
 
 ## Install
 
@@ -224,7 +256,8 @@ run date.
   production-shaped volumes) is not exercised.
 - **Testcontainers image source.** In the original environment Docker Hub blob downloads
   were refused by the egress policy; images were pulled from `mirror.gcr.io` via
-  `TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX`. The image tags are unchanged.
+  `TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX`. The image tags are unchanged, and the digest
+  actually used is recorded under "PostgreSQL test image".
 - **Formatting and linting are not configured** in this repository, so none were run.
   Type checking (`tsc --noEmit`, strict) passes.
 
