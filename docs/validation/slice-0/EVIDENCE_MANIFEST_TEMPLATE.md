@@ -20,6 +20,9 @@ Rules:
   deletion date and reason (withdrawal, retention expiry).
 - `reviewer` initials mean the second founder opened the item and checked the redaction
   status.
+- `participant_id` is one of `SI-###`, `SW-###`, `BM-###`, `RC-####` or empty;
+  `workflow_id` is `WF-###`, `FI-###` or empty (`DATA_DICTIONARY.md` §7). No other
+  identifier form appears.
 
 | evidence_id | participant_id | workflow_id | evidence_type | date | storage_location | sha256 | redaction_status | reviewer | notes |
 |---|---|---|---|---|---|---|---|---|---|
@@ -36,7 +39,7 @@ Rules:
 
 | evidence_id | participant_id | workflow_id | evidence_type | date | storage_location | sha256 | redaction_status | reviewer | notes |
 |---|---|---|---|---|---|---|---|---|---|
-| EV-EXAMPLE | S-EXAMPLE | WF-EXAMPLE | listing_screenshot | 2000-01-01 | PROTECTED-STORE:FICTIONAL/example.png | FICTIONAL-HASH-NOT-A-REAL-DIGEST | redacted | XX | FICTIONAL EXAMPLE ROW, NOT EVIDENCE |
+| EV-EXAMPLE | SW-EXAMPLE | WF-EXAMPLE | listing_screenshot | 2000-01-01 | PROTECTED-STORE:FICTIONAL/example.png | FICTIONAL-HASH-NOT-A-REAL-DIGEST | redacted | XX | FICTIONAL EXAMPLE ROW, NOT EVIDENCE |
 
 ## Integrity check record
 

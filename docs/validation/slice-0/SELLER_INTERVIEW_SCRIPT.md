@@ -1,10 +1,16 @@
 # Seller interview script
 
-Run once per enrolled seller, before their first workflow, about 25 minutes. The
-moderator reads the questions as written. Follow-ups are "Can you say more about that?"
-and "What happened next?" only. Do not explain the product before §8. Do not suggest an
-answer, a number or a feeling. Record verbatim where possible, in the interview record
-(protected store), with the seller ID only.
+This is the structured seller interview that `BIZ-092` requires: 20 completed interviews
+of active sellers are the minimum (`README.md` §2a). It is run once per person in the
+structured-interview cohort (`SI-###`). Every workflow seller is interviewed once with
+this script before their first workflow and holds a linked `SI-###`; an interview-only
+participant needs no items to list. It is never run with a moderated buyer participant
+(`BM-###`) or a real buyer contact (`RC-####`), and a workflow debrief is never recorded
+as an interview. About 25 minutes. The moderator reads the questions as written.
+Follow-ups are "Can you say more about that?" and "What happened next?" only. Do not
+explain the product before §8. Do not suggest an answer, a number or a feeling. Record
+verbatim where possible, in the interview record (protected store), under the `si_id`
+only, with `linked_sw_id` where one exists.
 
 Recording: notes always; audio only with the consent script §4 permission.
 
@@ -113,7 +119,7 @@ Do not ask "would you want it to accept for you".
 
 | ID | Question |
 |---|---|
-| IV-31 | After today's two listings, what would make you run a third one through this, and what would stop you? |
+| IV-31 | After today's two listings, what would make you run a third one through this, and what would stop you? (Interview-only participant: "If you ran two of your listings through what I just described, what would make you run a third, and what would stop you?") |
 | IV-32 | Who else do you know who sells this way? |
 
 ## 11. Credible paid intent (`BIZ-092`)
@@ -138,4 +144,9 @@ Any attempt by the seller to pay is declined and logged.
 > Thank you. Next we'll try the workflow on your first item. Before that, I'll show you
 > the consent note again and you can ask anything.
 
-Record `interview_completed = yes`, the time taken, and any deviation from the script.
+Interview-only participant: "Thank you. That's everything for today."
+
+Record `interview_completed = yes`, `si_id`, `linked_sw_id` (or `none`), the time taken,
+and any deviation from the script. An interview stopped before §11 is recorded with
+`interview_completed = no`; it keeps its `SI-###`, is never re-labelled, and does not
+count toward the 20.

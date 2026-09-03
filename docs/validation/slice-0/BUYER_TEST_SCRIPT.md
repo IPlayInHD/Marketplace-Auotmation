@@ -4,19 +4,21 @@ Two buyer populations exist and are never mixed:
 
 | Population | Who | Counted in | Script sections |
 |---|---|---|---|
-| **Real** (`R-nnnn`) | People who contacted a live validation listing on their own | Canonical funnel M-09, M-19, M-20, M-21; offers M-12; questions M-10 | §1 (notice only), §4 to §6 handled by the operator per the playbook; no interview |
-| **Moderated** (`B-nn`) | Recruited participants, about 25 minutes each, target 20 | M-10, M-11, M-12 (reported separately); trust and confusion questions | All sections |
+| **Real** (`RC-####`) | People who contacted a live validation listing (`WF-###` or `FI-###`) on their own; logged as events on a listing, never as recruited people (`SLICE_0_SCORECARD.md` §1a) | Canonical funnel M-09, M-19, M-20, M-21; offers M-12; questions M-10 | §1 (notice only), §4 to §6 handled by the operator per the playbook; no interview, no research question |
+| **Moderated** (`BM-###`) | Recruited participants, about 25 minutes each; 20 completed sessions minimum, 26 to 28 booked (`RECRUITMENT_PLAN.md` §0); not sellers in this run | M-10, M-11, M-12 (reported separately); trust and confusion questions | All sections |
 
 Moderated sessions explain *why*; real contacts measure *whether*. A moderated result is
-never entered in a real-funnel field.
+never entered in a real-funnel field. Neither population counts toward the 20 structured
+seller interviews (`SI-###`), which use a different script and a different cohort.
 
 ## 1. Buyer entry
 
 **Real buyers.** The listing carries the URL and code. The page shows the pilot notice
 (`CONSENT_AND_PRIVACY_SCRIPT.md` §2) before the first message. Nothing else is asked.
-The operator records, per contact: exposure confirmed (OVQ-05), page opened, code
-entered, first message sent, and the marketplace channel key. No name, handle or
-contact route is recorded in the scorecard.
+The operator records, per contact (`RC-####`): `listing_id` and `arm`, exposure basis
+and confirmation (`SLICE_0_SCORECARD.md` §1a, OVQ-05), page opened and its attribution
+(OVQ-08), code entered, first message sent, and the marketplace channel key. No name,
+handle or contact route is recorded in the scorecard.
 
 **Moderated buyers.** Consent per the consent script §3, ID assigned. The moderator says:
 

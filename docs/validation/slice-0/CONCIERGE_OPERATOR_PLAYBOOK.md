@@ -144,8 +144,8 @@ seller needs to decide anything, the operator sends the seller a **structured su
 and waits:
 
 ```
-Listing: WF-nn — [approved title]
-Buyer: R-nnnn (or B-nn)
+Listing: WF-### (or FI-###) — [approved title]
+Buyer: RC-#### (or BM-###)
 Offer: [amount] [currency]
 Conditions: [pickup | delivery | include: … | hold until … | none]
 Buyer availability: [as stated, or none]

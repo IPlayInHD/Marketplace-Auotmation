@@ -1,13 +1,23 @@
 # Consent and privacy script
 
-Plain-language disclosures for every participant, and the data rules the founders
+Plain-language disclosures for every participant type, and the data rules the founders
 follow. **This is not legal advice and makes no legal claim.** The applicable regime
 depends on the unresolved launch-jurisdiction question (`Q-07`); wording here follows
-the categories in `security/DATA_AND_PRIVACY.md` and is to be confirmed with counsel
-before use with participants (`DATA-248`, `DATA-381`). Where counsel changes the text,
-the record notes the version each participant saw (`DATA-245`).
+the categories in `security/DATA_AND_PRIVACY.md` (`DATA-248`, `DATA-381`). Where a
+review changes the text, the record notes the version each participant saw
+(`DATA-245`). Three levels of review apply and are not to be confused:
 
-## 1. Seller participant disclosure (read aloud, then given in writing)
+| Level | What | Effect on the run |
+|---|---|---|
+| Required | The plain-language disclosure for the participant's type (§1 workflow seller, §1a interview-only seller, §2 real buyer notice, §3 moderated buyer) is given, and consent recorded, before that person's session or first message | Blocks the session it applies to; a session without it is an HS-06 or HS-07 incident |
+| Recommended | A jurisdiction-specific legal review of this wording once the run's jurisdiction is known (`Q-07`); the founders record in the memo whether it happened and what changed | Recorded; not a universal blocker on the run |
+| Situational | Additional review may be needed before audio recording, before retaining sensitive information a participant volunteers, or where the run's jurisdiction has specific rules on research or recording; if that review is unavailable, the run proceeds without recording and redacts volunteered sensitive information on sight (§7) | Blocks only the specific activity |
+
+No marketplace credentials are requested from anyone. No personal information beyond
+the ID map is collected from anyone. Real buyer contacts are not participants in a
+study session: they see the page notice (§2) and nothing else.
+
+## 1. Workflow seller disclosure (`SW-###`; read aloud, then given in writing)
 
 > **What this is.** Two founders, [names], are studying how people who sell on online
 > marketplaces handle listings, buyer messages and offers. We are doing it by hand,
@@ -61,10 +71,32 @@ the record notes the version each participant saw (`DATA-245`).
 > **Contact.** [Incident and questions contact placeholder: a named founder and one
 > contact route, to be filled before the first session.]
 
-Record: participant ID, date, notice version, `audio_consent` (yes/no),
-`screenshot_consent` (yes/no), `gesture_stated` (yes/no).
+Record: participant ID (`SW-###` with its linked `SI-###`), `cohort`, date, notice
+version, `audio_consent` (yes/no), `screenshot_consent` (yes/no), `gesture_stated`
+(yes/no).
 
-## 2. Buyer notice on the pilot page (shown before the first message)
+## 1a. Interview-only seller disclosure (`SI-###` without a workflow)
+
+Read §1 with these substitutions for a person who is interviewed and does not run
+listings: replace the last sentence of **What this is** with "Taking part means one
+conversation with us of about twenty-five minutes about how you sell today and what,
+if anything, you would pay for help with it. You will not list anything, and we will
+not touch your listings or accounts." Omit **What we will ask you to do** and **Who
+answers your buyers**. In **What we record**, keep only "your answers to our questions"
+and the private list sentence. Keep every other paragraph as written.
+
+If the same person later agrees to run listings, read the full §1 before their first
+workflow and record that consent under a new `SW-###` linked to their existing
+`SI-###`; the interview is not repeated.
+
+Record as in §1, with `cohort = SI` and `linked_sw_id = none`.
+
+## 2. Real buyer notice on the pilot page (`RC-####`; shown before the first message)
+
+Real buyer contacts are not recruited, not interviewed, not asked any research
+question, not offered a gesture and not asked for any personal information. This notice
+is the only disclosure they receive; contacting a listing is a funnel event, not a
+study session.
 
 Fixed text on every validation page, above the question form:
 
@@ -80,7 +112,7 @@ Fixed text on every validation page, above the question form:
 
 The disclosure banner of `CONCIERGE_OPERATOR_PLAYBOOK.md` §6 (P-01) appears above it.
 
-## 3. Moderated buyer participant disclosure (read aloud)
+## 3. Moderated buyer participant disclosure (`BM-###`; read aloud)
 
 > **What this is.** A 25-minute test of a page a marketplace seller might link to. You
 > will use your own phone on a real listing, ask questions and, if you want, make an
@@ -98,7 +130,8 @@ The disclosure banner of `CONCIERGE_OPERATOR_PLAYBOOK.md` §6 (P-01) appears abo
 > **Your choices.** Stop at any time, skip any question, ask for anything to be
 > deleted. [Gesture, if any, stated up front.] [Contact placeholder.]
 
-Record as in §1.
+Record as in §1, with `cohort = BM`. A moderated buyer participant is not a seller in
+this run and is never read §1 or §1a; their session is never recorded as an interview.
 
 ## 4. Human-concierge disclosure rules
 
@@ -117,7 +150,7 @@ Record as in §1.
    `withdrawn = yes`.
 3. Aggregated counts already computed stay as counts; nothing attributable remains.
 4. A real buyer who asks for deletion through the page's deletion route is handled the
-   same way against their `R-nnnn` contact and the conversation record.
+   same way against their `RC-####` event row and the conversation record.
 5. The founder confirms to the person what was deleted and what, if anything, remains as
    an aggregate (`DATA-347`: never claim more deletion than happened).
 
@@ -126,7 +159,7 @@ Record as in §1.
 | Rule | Statement |
 |---|---|
 | DM-1 | Collect only the fields in `DATA_DICTIONARY.md`. A new field needs a dictionary entry before it is collected. |
-| DM-2 | Buyer identity is a contact number. No name, marketplace handle, email or phone is recorded for a real buyer; an optional pilot reply channel (OVQ-02) is kept only with the raw conversation in the protected store and deleted with it. |
+| DM-2 | A real buyer is an event identifier (`RC-####`) on a listing, never a person record. No name, marketplace handle, email or phone is recorded for a real buyer; an optional pilot reply channel (OVQ-02) is kept only with the raw conversation in the protected store and deleted with it. |
 | DM-3 | Seller identity lives in one ID-map file in the protected store. Nowhere else. |
 | DM-4 | The seller's minimum price and rules live on the private sheet only; never in a scorecard, memo, buyer page or message. |
 | DM-5 | Raw transcripts, recordings and unmasked screenshots never leave the protected store. What leaves is a summary with IDs, or a masked screenshot registered in the manifest. |
@@ -134,6 +167,7 @@ Record as in §1.
 | DM-7 | No third-party analytics or tracking runs on the pilot page. |
 | DM-8 | Screenshots are taken only with the participant's `screenshot_consent`, and identities on them are masked before any copy leaves the protected store. |
 | DM-9 | Buyer free text is treated as sensitive whatever it contains (`DATA-268`). |
+| DM-10 | The pilot page's open counter or access log runs on a founder-controlled host, keeps no IP address for longer than 7 days, sets no cookie, and holds only the listing id, timestamp, optional `?r=RC-####` reference and code-entry result (`SLICE_0_SCORECARD.md` §1a). |
 
 ## 7. Prohibited data
 
@@ -152,6 +186,7 @@ children's data.
 | Raw interview notes and audio | Protected store | Same | Delete; manifest row marked deleted |
 | Raw conversations and unmasked screenshots | Protected store | Same | Same |
 | Seller private price sheet | Protected store | Deleted when the workflow closes and the summary is written | Same |
+| Page-open log | Founder-controlled host | IP addresses at most 7 days; remaining entries as raw data, 90 days after the memo | Rotated on the host; counts copied to rows |
 | Scorecard CSVs (IDs and coded fields) | Protected store; a redacted copy may be committed with the memo | Study record | Kept; personal fields never present |
 | Masked screenshots, summaries, manifest, memo | Protected store and, redacted, the repository | Study record | Kept |
 

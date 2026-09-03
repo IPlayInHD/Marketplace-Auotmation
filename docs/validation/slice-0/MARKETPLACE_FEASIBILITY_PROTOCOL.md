@@ -40,7 +40,7 @@ For each channel the validation will use, and each surface tested on it, one row
 | `messages_permit_flow` | Same values, for a link or code in a reply or direct message (Q2) |
 | `distinguishes_link_types` | What the policy says about bare domain, path URL, image, QR (Q4), or `not_addressed` |
 | `stated_enforcement` | Removal, warning, restriction, suspension, or `not_stated` (Q6) |
-| `visibility_test_listing` | The `WF-nn` used, or `founder-owned:<item>` |
+| `visibility_test_listing` | The `WF-###` or `FI-###` used |
 | `visibility_test_date` | Date published |
 | `visible_after_24h`, `visible_after_48h`, `visible_after_7d` | `yes` / `no` / `altered` / `not_checked` |
 | `mobile_behavior` | What a buyer sees on a phone: link tappable / plain text / hidden / truncated |

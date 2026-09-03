@@ -1,17 +1,19 @@
 # Seller concierge test — moderator instructions
 
-One run of this procedure is one seller/listing **workflow** (`WF-nn`). Each enrolled
-seller runs at least two, on two real items they intend to sell. The moderator is one
-founder; the concierge operator answering buyers may be the other founder. Every step
-is timed with a stopwatch log kept in the protected store.
+One run of this procedure is one seller/listing **workflow** (`WF-###`). Each workflow
+seller (`SW-###`) runs at least two, on two real items they intend to sell. A
+founder-experiment item (`FI-###`) is never run through this procedure. The moderator
+is one founder; the concierge operator answering buyers may be the other founder. Every
+step is timed with a stopwatch log kept in the protected store.
 
 Roles: **Moderator** (runs this script, observes, records) · **Operator** (plays the
 future system per `CONCIERGE_OPERATOR_PLAYBOOK.md`) · **Seller** (the participant).
 
 ## 1. Before the session
 
-- Consent given and recorded (`CONSENT_AND_PRIVACY_SCRIPT.md`); seller ID assigned.
-- Interview completed; `baseline_prepare_min` recorded.
+- Consent given and recorded (`CONSENT_AND_PRIVACY_SCRIPT.md` §1); `SW-###` assigned
+  with its linked `SI-###`.
+- Structured interview completed under that `SI-###`; `baseline_prepare_min` recorded.
 - Channel(s) the seller will publish on have a completed policy-reading row in
   `MARKETPLACE_EVIDENCE_TEMPLATE.csv` (`MARKETPLACE_FEASIBILITY_PROTOCOL.md` step 1).
   If the row is `VERIFIED RESTRICTED` for every surface on that channel, the seller
@@ -20,7 +22,8 @@ future system per `CONCIERGE_OPERATOR_PLAYBOOK.md`) · **Seller** (the participa
   is told so in the words of `BUYER-024` and chooses whether to include the link.
 - A static buyer page exists for this listing (§5) with the code set, the pilot notice
   and the disclosure banner.
-- Scorecard row `WF-nn` created with `stage_reached = 0`.
+- Scorecard row `WF-###` created with `stage_reached = 0`, `seller_id` and
+  `linked_si_id` filled.
 
 ## 2. Opening (read aloud)
 
@@ -128,7 +131,7 @@ evidence sheet as well (`MARKETPLACE_FEASIBILITY_PROTOCOL.md` §5).
 ## 10. URL/code-sharing step (ST-05 preparation)
 
 Record how the link and code were actually exposed: in the listing body, in a reply
-only (arm 2), or via the phone-number control arm (arm 3, founder-owned listings only).
+only (arm 2), or via the phone-number control arm (arm 3, founder items `FI-###` only).
 Note the exact text as published (screenshot to the protected store, redacted copy to
 the manifest). This is the evidence for M-08 and the exposure denominator of M-19
 (OVQ-05).

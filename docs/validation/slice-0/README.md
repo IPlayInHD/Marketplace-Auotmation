@@ -58,6 +58,41 @@ seller handoff. Real items, real listings, real buyers.
 The founders may perform by hand every function the future system would perform,
 inside those limits.
 
+## 2a. Cohorts and minimum sample
+
+Five cohorts take part. They are recorded with different identifiers, serve different
+hypotheses and feed different denominators. A person may belong to two cohorts only
+where the table allows it, and then carries two linked identifiers; their evidence is
+counted once in each cohort's own metrics and never twice within one denominator.
+
+| Cohort | Identifier | Minimum count | Eligibility | Purpose | Evidence produced | Metrics affected | Overlap allowed | Enters the primary workflow denominator |
+|---|---|---|---|---|---|---|---|---|
+| Structured seller interviews | `SI-###` | 20 completed interviews (`BIZ-092`) | Active seller per `RECRUITMENT_PLAN.md` §1 E-1, E-3, E-5 and no exclusion rule; not a founder, team member or immediate family (their interviews as workflow sellers are recorded and reported separately, never among the 20); items to list are not required | Seller pain (H-01), attitude to the approval step (H-09 attitude), stated reuse intent (H-10 stated), credible willingness to pay (H-11) | Interview record (I) per `SELLER_INTERVIEW_SCRIPT.md` | M-02, M-17, IV coding | Yes: a workflow seller is also interviewed once and holds a linked `SI-###`; moderated buyers and real contacts never | No |
+| Workflow sellers | `SW-###` | 5 enrolled, of whom at least 3 are not founders, team members or immediate family | E-1 to E-6 | Behavioural test of the seller side (H-02 to H-05, H-09 behaviour, H-10 behaviour) | Workflow rows (W), stopwatch logs, copy versions | M-01, M-03 to M-06, M-08, M-13, M-16, M-22 | Yes: every workflow seller is a subset of the interview cohort (interviewed once, before the first workflow); not a moderated buyer; not a real contact | Through their workflows |
+| Listing workflows | `WF-###` | 10 non-excluded, at least 2 per workflow seller | A real item the workflow seller intends to sell, not a founder-experiment item | The primary success unit (`SLICE_0_SCORECARD.md` §2) | W rows | Workflow success rate, M-03 to M-08, M-13 | An item is either a `WF-###` or an `FI-###`, never both | **Yes: this is the denominator** |
+| Founder-item marketplace experiment | `FI-###` | 15 to 20 real founder-owned items across the three canonical arms | Items the founders own and will sell | The canonical Slice 0 experiment: channel verification (Test 1), the real-buyer funnel (Test 2), arm comparison | Channel rows (C), real-contact events | M-08, M-18, M-19, M-09, M-20, M-21 | Founders may separately enrol as workflow sellers (`SW-###`, `relationship = founder`) on other items; a founder-experiment item never becomes a workflow | No |
+| Moderated buyer sessions | `BM-###` | 20 completed sessions | `RECRUITMENT_PLAN.md` §3 | Comprehension, trust, URL and code entry, questions, unknown-fact handling, offer submission, the *why* behind the funnel (H-06 to H-08) | Buyer rows with `population = moderated` (B), post-task answers | M-10, M-11, M-12 moderated split, trust and AI-reaction codes | No: not an interview, not a real contact, not a seller cohort in this run | No |
+| Real buyer contacts | `RC-####` (events, no identity) | 100 confirmed exposed contacts | An unrecruited person who contacted a live validation listing (`WF-###` or `FI-###`) | The canonical link-open and code-entry funnel; conversation volume; real questions and offers | Buyer rows with `population = real` (B): funnel events only | M-09, M-19, M-20, M-21, M-10 and M-12 real split | No: a contact is never recruited into any other cohort during the run | No |
+
+Twenty moderated buyer sessions and twenty structured seller interviews are two
+different cohorts with two different scripts; one never counts toward the other. One
+hundred real contacts are events in a funnel, not interviews; nobody is interviewed by
+contacting a listing. Full definitions of a confirmed contact and a confirmed exposure
+are in `SLICE_0_SCORECARD.md` §1a. Recruitment buffers that make the minimums reachable
+are in `RECRUITMENT_PLAN.md` §0.
+
+**BIZ-092 reading used here.** `business/BUSINESS_MODEL.md` `BIZ-092` states the
+assumption about "target sellers", its falsifier as "willingness-to-pay interviews"
+clustering below CAD 20, and its test as "20 structured interviews before pricing is
+fixed". The test cell does not repeat the word "sellers", but the assumption it tests is
+about sellers, the falsifier is a willingness-to-pay figure, and `BIZ-001` states that the
+subscription buyer is the seller and the item buyer is never a customer. The kit
+therefore reads the requirement as 20 structured interviews of active sellers, records
+that the test cell alone is not explicit, and adopts that reading as the conservative
+default for this run. Buyer sessions do not count toward it. `BIZ-094` places
+`BIZ-092` last in the dependency order; the interviews run alongside Slice 0 for
+efficiency, and the memo reads their result only in the light of the earlier gates.
+
 ## 3. Preconditions
 
 Before the first session:
@@ -83,11 +118,11 @@ Before the first session:
 
 | Step | Do | With |
 |---|---|---|
-| 1 | Recruit and screen sellers; assign participant IDs | `RECRUITMENT_PLAN.md` |
-| 2 | Interview each seller before their first workflow | `SELLER_INTERVIEW_SCRIPT.md` |
+| 1 | Recruit and screen sellers and buyer participants to the buffered targets; assign cohort identifiers | `RECRUITMENT_PLAN.md` §0, §8 |
+| 2 | Run 20 structured seller interviews (`SI-###`); every workflow seller is interviewed once before their first workflow | `SELLER_INTERVIEW_SCRIPT.md` |
 | 3 | Run each seller/listing workflow end to end, timed and observed | `SELLER_CONCIERGE_TEST.md`, `CONCIERGE_OPERATOR_PLAYBOOK.md` |
 | 4 | Read policy, publish, and observe each channel used | `MARKETPLACE_FEASIBILITY_PROTOCOL.md`, `MARKETPLACE_EVIDENCE_TEMPLATE.csv` |
-| 5 | Answer real inbound buyers and run moderated buyer sessions | `BUYER_TEST_SCRIPT.md`, `CONCIERGE_OPERATOR_PLAYBOOK.md` |
+| 5 | Answer real inbound buyer contacts (`RC-####`) on live listings and run 20 moderated buyer sessions (`BM-###`) | `BUYER_TEST_SCRIPT.md`, `CONCIERGE_OPERATOR_PLAYBOOK.md` |
 | 6 | Record every field, every day | `SELLER_SCORECARD_TEMPLATE.csv`, `BUYER_SCORECARD_TEMPLATE.csv`, `INCIDENT_LOG_TEMPLATE.csv`, `DAILY_OPERATOR_CHECKLIST.md` |
 | 7 | Register and hash every piece of evidence | `EVIDENCE_MANIFEST_TEMPLATE.md` |
 | 8 | Compute the scorecard | `SLICE_0_SCORECARD.md`, `DATA_DICTIONARY.md` |
@@ -101,8 +136,8 @@ session using `CONSENT_AND_PRIVACY_SCRIPT.md`.
 | File | What it is |
 |---|---|
 | `HYPOTHESIS_AND_REQUIREMENTS_MATRIX.md` | Every hypothesis, its canonical source, test, evidence, metric, pass rule, risk and the decision it affects |
-| `RECRUITMENT_PLAN.md` | Eligibility, exclusions, channels, scripts, screening, bias controls, participant IDs |
-| `SELLER_INTERVIEW_SCRIPT.md` | Pre-workflow interview, non-leading |
+| `RECRUITMENT_PLAN.md` | Recruitment targets and buffers, eligibility, exclusions, channels, scripts, screening, bias controls, cohort identifiers |
+| `SELLER_INTERVIEW_SCRIPT.md` | Structured seller interview (`SI-###`), non-leading; also run once per workflow seller |
 | `SELLER_CONCIERGE_TEST.md` | Moderator procedure for one seller/listing workflow |
 | `BUYER_TEST_SCRIPT.md` | Moderated buyer session procedure |
 | `CONCIERGE_OPERATOR_PLAYBOOK.md` | How a founder plays the future system, and what they may never do |
@@ -110,7 +145,7 @@ session using `CONSENT_AND_PRIVACY_SCRIPT.md`.
 | `CONSENT_AND_PRIVACY_SCRIPT.md` | Participant disclosure, human-concierge disclosure, minimisation, withdrawal, deletion |
 | `DATA_DICTIONARY.md` | Every field collected, its type, stage, sensitivity, storage, retention and metric |
 | `SELLER_SCORECARD_TEMPLATE.csv` | One row per seller/listing workflow |
-| `BUYER_SCORECARD_TEMPLATE.csv` | One row per moderated buyer session or real buyer contact |
+| `BUYER_SCORECARD_TEMPLATE.csv` | One row per moderated buyer session (`BM-###`) or real buyer contact event (`RC-####`) |
 | `MARKETPLACE_EVIDENCE_TEMPLATE.csv` | One row per channel and placement surface tested |
 | `INCIDENT_LOG_TEMPLATE.csv` | One row per incident, near miss or hard-stop candidate |
 | `DAILY_OPERATOR_CHECKLIST.md` | Before, during and after every session |
@@ -162,9 +197,10 @@ continuation (`Q-04`) and buyer-code pre-filling (`Q-03`) all stay open.
 | OVQ-02 | How does a buyer who arrives through the URL and code receive replies without product software? | The canonical page is "a form"; replies need a return path; the product collects no buyer email (`Q-05`, `DATA-260`) | The pilot page offers a free-text question form and an **optional** reply channel chosen by the buyer (the marketplace thread they came from, or a pilot-only contact they type), stated as pilot-only and deleted per §6 of the consent script. This does not resolve `Q-05`. |
 | OVQ-03 | Which channels are "primary" for Test 1? | `INT-091` is open; Test 1 requires two primary channels | The two channels the recruited sellers already use most, recorded in the memo. Not a launch-channel decision. |
 | OVQ-04 | Is the pre-filled code variant tested? | `Q-03` is open; canonical Test 2 says run both variants "if volume permits" | Run the two-part form as default; run the pre-filled variant only on founder-owned listings if at least 100 contacts on the default variant are already secured. Not a `Q-03` decision. |
-| OVQ-05 | What counts as a "link exposure" for the link-open denominator when a marketplace surface hides the link? | Denominator integrity for the canonical gate | Count a contact as exposed only when the founder confirms the URL and code were actually shown to that buyer (in the listing body or in a reply). Unconfirmed contacts are excluded and counted separately. |
+| OVQ-05 | What counts as a "link exposure" for the link-open denominator when a marketplace surface hides the link? | Denominator integrity for the canonical gate | The definitions in `SLICE_0_SCORECARD.md` §1a: a contact is exposed only on a recorded basis (the link was in a listing body confirmed visible at the time of contact, or was sent to that person in a reply). Unconfirmed contacts are logged and excluded from the denominator. |
 | OVQ-06 | How is "time saved" estimated without a production tool? | H-03 needs a baseline | Seller self-reports their usual time for a comparable listing, before the session, on the interview; the session time is measured. The difference is labelled an estimate from a self-reported baseline, never a finding. |
 | OVQ-07 | May a founder reply inside a seller's marketplace thread? | Credential and impersonation prohibitions | No. The founder drafts; the seller sends from their own device and account, or the buyer moves to the pilot page. |
+| OVQ-08 | How is a page open attributed to a specific real contact? | Per-contact attribution is only possible when the link was sent to that person | On the reply-only arm the link sent to a contact carries a pseudonymous reference (`?r=RC-####`) read from the founder-controlled host's access log; on the listing-body arm attribution is by the contact's own statement or a code submission, otherwise `not_attributable`, and the memo reports listing-level opens beside contact-level opens (`SLICE_0_SCORECARD.md` §1a). The reference identifies an event, never a person. |
 
 ## 8. Warnings that apply to every file
 

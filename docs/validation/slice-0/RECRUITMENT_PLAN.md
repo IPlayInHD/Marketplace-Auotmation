@@ -3,11 +3,33 @@
 How sellers and buyer-test participants are found, screened, identified and protected
 from bias. Nothing here contacts anyone through a marketplace's own messaging on the
 founders' behalf, buys traffic, or promises any outcome (`INT-060`, `BIZ-072`,
-`BIZ-160`).
+`BIZ-160`). The cohorts are defined in `README.md` §2a.
+
+## 0. Recruitment targets and buffers
+
+Recruiting exactly the minimum does not produce the minimum completed sample. The
+targets below add a buffer on stated planning assumptions. The assumptions are
+placeholders to be replaced by the run's own counts at the week-3 checkpoint
+(`EXECUTION_SCHEDULE.md`); they are not findings. When a target is missed, extend
+outreach; never lower eligibility, never re-label a participant into another cohort, and
+never drop a completed record.
+
+| Cohort | Minimum completed | Planning assumption (placeholder) | Recruit or plan for | Rule |
+|---|---|---|---|---|
+| Structured seller interviews `SI-###` | 20 completed | About 1 in 3 outreach contacts reply; about half of those screened are eligible; about 5 in 6 booked interviews complete | 70 to 80 outreach contacts → about 24 booked → 20 completed | Stop booking only when 20 interviews are complete per `SELLER_INTERVIEW_SCRIPT.md` §12 |
+| Workflow sellers `SW-###` | 5 enrolled with 2 completed workflows each; at least 3 non-founder | About 3 in 5 eligible interviewees with items agree to workflows; about 4 in 5 complete both | Enrol 7 workflow sellers, at least 5 non-founder, from the interview cohort | A workflow seller who completes only one workflow stays enrolled and their one workflow stays in the denominator |
+| Listing workflows `WF-###` | 10 non-excluded | 7 sellers × 2 = 14 started; a few excluded or abandoned | Plan 14 workflows | Exclusion only per `SLICE_0_SCORECARD.md` §6 |
+| Founder-item experiment `FI-###` | 15 to 20 items | Canonical; founders' own items | 20 items, arms assigned before publication | Not a workflow; never a `WF-###` |
+| Moderated buyer sessions `BM-###` | 20 completed | About 1 in 4 booked participants do not attend or do not complete | Book 26 to 28 sessions | A session stopped by the participant is complete for M-11 and counts |
+| Real buyer contacts `RC-####` | 100 confirmed exposed | Unknown; the placeholder is 3 to 8 contacts per live listing over its window | 25 to 30 live listings (10 to 14 workflow listings plus 15 to 20 founder items); week-3 checkpoint adds founder items if the pace is short | Exposure and attribution per `SLICE_0_SCORECARD.md` §1a; unconfirmed contacts are logged, not counted |
 
 ## 1. Seller eligibility
 
-A seller is **eligible** when all of the following hold at screening:
+A seller is **eligible for a structured interview** (`SI-###`) when E-1, E-3 and E-5 hold
+and no exclusion rule in §2 applies. A seller is **eligible as a workflow seller**
+(`SW-###`) when all of E-1 to E-6 hold. Every workflow seller is interviewed once with
+the full script before their first workflow, and that interview counts toward the 20 as
+their linked `SI-###`; an interviewee without items to list is an `SI-###` only.
 
 | # | Criterion | Why | Source |
 |---|---|---|---|
@@ -18,11 +40,15 @@ A seller is **eligible** when all of the following hold at screening:
 | E-5 | Is an adult and gives consent per `CONSENT_AND_PRIVACY_SCRIPT.md` | Ethics | `DATA-200` |
 | E-6 | Sells in a category the study still needs to reach three categories, or any category once three are covered | At least 3 categories | Sample design |
 
-**Non-founder requirement.** At least 3 enrolled sellers are not founders, team members,
-or immediate family of either. Founders and their households may enrol as additional
-sellers, labelled `relationship = founder` or `family`, and their workflows are reported
-separately as well as in the total. If the non-founder count is under 3 at the decision
-meeting, HS-09 applies.
+**Non-founder requirement.** At least 3 enrolled workflow sellers are not founders, team
+members, or immediate family of either. Founders and their households may enrol as
+additional workflow sellers, labelled `relationship = founder` or `family`, on items that
+are **not** part of the founder-item experiment; their workflows are reported separately
+as well as in the total. A founder or family member enrolled as a workflow seller is
+interviewed once like any other workflow seller (their linked `SI-###` supplies the
+workflow baseline), but that interview is reported separately and is never one of the 20
+structured interviews or in the M-17 denominator. If the non-founder count is under 3 at
+the decision meeting, HS-09 applies.
 
 ## 2. Exclusion rules
 
@@ -41,14 +67,18 @@ excluded after enrolment keeps their participant ID; their rows are marked
 
 ## 3. Buyer-test participant eligibility
 
-Moderated buyer participants (target 20) must: have bought a secondhand item through an
-online marketplace in the last 12 months; own a phone they can use in the session; not
-be a founder, team member or immediate family (buyer sessions run by family are
-`relationship = family` and reported separately, never counted toward the 20); not have
-seen the buyer page before the session.
+Moderated buyer participants (`BM-###`, 20 completed) must: have bought a secondhand
+item through an online marketplace in the last 12 months; own a phone they can use in the
+session; not be a founder, team member or immediate family (buyer sessions run by family
+are `relationship = family` and reported separately, never counted toward the 20); not
+have seen the buyer page before the session; not be an interviewed or workflow seller in
+this run. A moderated buyer session is not a structured interview and is never counted
+as one.
 
-Real inbound buyers are not recruited and not screened. They are people who contacted a
-live listing. They receive the pilot notice on the page and nothing else is asked of them.
+Real buyer contacts (`RC-####`) are not recruited, not screened and not interviewed.
+They are people who contacted a live listing on their own. They receive the pilot notice
+on the page and nothing else is asked of them. Nobody is invited from a real contact into
+any other cohort during the run.
 
 ## 4. Recruitment channels, low-cost
 
@@ -125,8 +155,8 @@ as a refusal.
 
 | ID | Bias | Control |
 |---|---|---|
-| B-1 | Friendly-sample bias: founders' friends over-report satisfaction | Relationship field on every seller; non-founder minimum of 3; results reported by relationship group; a PASS cannot rest on founder or family rows alone (HS-09) |
-| B-2 | Moderated buyers complete because they were asked to | Moderated sessions are never counted in the canonical funnel (M-09, M-19, M-20) |
+| B-1 | Friendly-sample bias: founders' friends over-report satisfaction | Relationship field on every seller; non-founder minimum of 3 workflow sellers; founders and family never counted among the 20 interviews; results reported by relationship group; a PASS cannot rest on founder or family rows alone (HS-09) |
+| B-2 | Moderated buyers complete because they were asked to | Moderated sessions are never counted in the canonical funnel (M-09, M-19, M-20) and are never counted as interviews |
 | B-3 | Founder as operator over-performs against the future system | Operator uses only the fact sheet and the playbook's allowed responses; improvisation is logged as M-14 manual intervention; the second founder reviews a sample of every conversation |
 | B-4 | Survivorship: failed workflows dropped | `SLICE_0_SCORECARD.md` §6 exclusion rules; every exclusion listed in the memo |
 | B-5 | Leading questions | Interview and buyer scripts use open, past-behaviour questions; hypotheticals come last and are labelled |
@@ -135,21 +165,48 @@ as a refusal.
 | B-8 | Founder expectation | Scorecard fields are filled during the session, not reconstructed after; timings from a stopwatch log, not memory |
 | B-9 | Seasonal or item-value effects | Item asking price band recorded (`price_band`), never a valuation |
 | B-10 | Reporting bias in the memo | Both founders sign; the memo's evidence-completeness section is written before the result section |
+| B-11 | Cohort drift: a participant re-labelled to fill a shortfall | Cohort is fixed at consent and recorded in the ID map; a change of cohort is an incident, not an edit; linked identifiers are the only permitted relationship |
 
-## 8. Participant-ID procedure
+## 8. Cohort identifiers and double-counting rules
 
-1. IDs are assigned at consent, in order: sellers `S-01`, `S-02`, …; moderated buyers
-   `B-01`, `B-02`, …; workflows `WF-01`, `WF-02`, … (one per seller/listing);
-   channels use the keys in `MARKETPLACE_STRATEGY.md` `INT-052` (`fb_marketplace`,
-   `ebay`, `kijiji`, …); real buyer contacts `R-0001`, `R-0002`, …; evidence items
-   `EV-0001`, …; incidents `INC-001`, ….
-2. The **ID map** (ID ↔ name, contact route, relationship) lives only in the protected
-   store, in one file, readable by the two founders. It is never committed, never
-   attached to a scorecard, never pasted into a memo.
-3. Every artefact that leaves the protected store (a summary, a redacted screenshot, a
-   scorecard row) carries IDs only.
-4. A real buyer contact `R-nnnn` is never linked to a name, a marketplace handle or a
-   contact route in any file. The row holds the funnel events and nothing identifying.
-5. Deleting a participant means deleting their ID-map entry and their raw evidence; the
-   scorecard row keeps its aggregate fields and gains `withdrawn = yes` (see consent
-   script §5).
+1. Identifiers are assigned at consent (or at first contact for real buyers), in order
+   within each series:
+
+   | Series | Cohort | One per |
+   |---|---|---|
+   | `SI-001`, `SI-002`, … | Structured seller interview | Completed or attempted interview of one person |
+   | `SW-001`, `SW-002`, … | Workflow seller | Enrolled seller running workflows |
+   | `WF-001`, `WF-002`, … | Listing workflow | One real item of one workflow seller |
+   | `FI-001`, `FI-002`, … | Founder-item experiment | One founder-owned item, with its arm |
+   | `BM-001`, `BM-002`, … | Moderated buyer session | One participant's session |
+   | `RC-0001`, `RC-0002`, … | Real buyer contact | One contact event on one live listing; no identity |
+   | `EV-0001`, …; `INC-001`, … | Evidence item; incident | As before |
+
+   Channels use the keys in `MARKETPLACE_STRATEGY.md` `INT-052`.
+2. **Linked identifiers.** A workflow seller holds one `SW-###` and one linked `SI-###`
+   (their single interview). The link is recorded once, in the ID map and in the
+   `linked_si_id` field of their workflow rows. No other links exist: a moderated buyer is
+   never a seller in this run; a real contact is never linked to any person.
+3. **Counted once per denominator.** An interview enters interview metrics (M-02, M-17)
+   once under its `SI-###`. A workflow enters workflow metrics once under its `WF-###`.
+   A workflow seller's second workflow is the reuse observation for M-16 and is not a
+   second seller. A founder-experiment item is never a workflow, so it never enters the
+   workflow denominator; its contacts enter the real-buyer funnel like any other listing.
+4. **Never moved.** A participant's cohort is fixed at consent. An interviewee who later
+   agrees to run workflows receives a new `SW-###` linked to the existing `SI-###`; the
+   interview record is not re-created. A workflow seller who withdraws before any
+   workflow keeps their `SI-###` and their `SW-###` is marked `withdrawn = yes`. Nobody
+   is re-labelled to fill a shortfall (B-11).
+5. **Never excluded for the result.** An unfavourable interview, session or workflow is
+   evidence. Exclusion follows `SLICE_0_SCORECARD.md` §6 only.
+6. The **ID map** (identifier ↔ name, contact route, relationship, cohort, links) lives
+   only in the protected store, in one file, readable by the two founders. It is never
+   committed, never attached to a scorecard, never pasted into a memo. Every artefact
+   that leaves the protected store carries identifiers only.
+7. A real buyer contact `RC-####` is never linked to a name, a marketplace handle, a
+   contact route or a device in any file. The row holds funnel events and nothing
+   identifying. The optional pilot reply channel (OVQ-02) stays with the raw transcript
+   only.
+8. Deleting a participant means deleting their ID-map entry and their raw evidence; the
+   scorecard row keeps its aggregate fields and gains `withdrawn = yes` (consent script
+   §5).

@@ -26,16 +26,19 @@ with its fraction, and whether any hard stop occurred.
 | Sellers recruited (received outreach) | | |
 | Sellers screened | | |
 | Sellers eligible | | |
-| Sellers enrolled | | of which non-founder ____, founder ____, family ____ |
-| Workflows started | | |
+| Structured seller interviews completed (`SI-###`, `relationship = none`) | | of which also workflow sellers ____ (linked `SW-###`); each person once; no buyer session counted; founder and family interviews ____ reported separately, not in this count |
+| Workflow sellers enrolled (`SW-###`) | | of which non-founder ____, founder ____, family ____; every row has one linked `SI-###` |
+| Workflows started (`WF-###`) | | |
 | Workflows completed | | |
 | Workflows excluded | | every exclusion listed in §2.1 |
 | Workflows successful | | |
+| Founder items published (`FI-###`) | | arms: listing_body ____ / reply_only ____ / phone_control ____; none in the workflow denominator |
 | Categories represented | | list |
 | Channels used | | keys and counts |
-| Real buyer contacts, confirmed exposed | | |
-| Real buyer contacts, exposure unconfirmed (excluded from M-19) | | |
-| Moderated buyer sessions | | of which family ____ (reported separately) |
+| Real buyer contacts logged (`RC-####`) | | events on listings, not people; no identity held |
+| Real buyer contacts, confirmed exposed (M-19 denominator) | | by basis: body_visible ____ / sent_in_reply ____ (`SLICE_0_SCORECARD.md` §1a) |
+| Real buyer contacts, exposure unconfirmed (excluded from M-19) | | of which phone_control ____, not_unrecruited ____ |
+| Moderated buyer sessions completed (`BM-###`) | | booked ____; of which family ____ (reported separately); none counted as an interview or a real contact |
 
 ### 2.1 Excluded workflows
 
@@ -47,12 +50,15 @@ with its fraction, and whether any hard stop occurred.
 
 | Requirement | Met | Evidence |
 |---|---|---|
-| At least 10 non-excluded workflows | | |
-| At least 5 sellers, at least 3 non-founder sellers with completed workflows | | |
-| At least 2 workflows per seller | | |
+| At least 10 non-excluded workflows (`WF-###`) | | |
+| At least 5 workflow sellers (`SW-###`), at least 3 non-founder, with completed workflows | | |
+| At least 2 workflows per workflow seller | | |
+| At least 20 completed structured seller interviews (`SI-###`) with `relationship = none`, each person once, none of them a buyer session (`BIZ-092`) | | |
+| 15 to 20 founder items (`FI-###`) with arms recorded before publication, none in the workflow denominator | | |
 | At least 3 categories | | |
-| At least 100 confirmed real buyer contacts | | |
-| At least 20 moderated buyer sessions | | |
+| At least 100 confirmed exposed real buyer contacts (`RC-####`, `SLICE_0_SCORECARD.md` §1a) | | |
+| At least 20 completed moderated buyer sessions (`BM-###`) | | |
+| No participant counted twice within one denominator; every `SW-###` carries one linked `SI-###`; no cohort re-labelling (B-11) | | |
 | Channel evidence rows for every channel used, each with a policy source and date | | |
 | Manifest complete; hashes verified | | |
 | Every metric's missing-data count stated | | |
@@ -67,7 +73,7 @@ fail / inconclusive with the metric value as a fraction and a percentage.
 
 | Hypothesis | Metric(s) | Value (fraction and %) | Missing-data count | Result | Evidence refs |
 |---|---|---|---|---|---|
-| H-01 | M-02, IV coding | | | | |
+| H-01 | M-02, IV coding over `SI-###` | | | | |
 | H-02 | M-22 | | | | |
 | H-03 | M-04, M-05, M-06 | | | | |
 | H-04 | ST-04, M-03 | | | | |
@@ -76,8 +82,8 @@ fail / inconclusive with the metric value as a fraction and a percentage.
 | H-07 | M-10, M-07 | | | | |
 | H-08 | M-12, M-21 | | | | |
 | H-09 | M-13 | | | | |
-| H-10 | M-16 | | | | |
-| H-11 | M-17 (levels; amounts banded) | | | | |
+| H-10 | M-16 over `SW-###` (behaviour); IV-31 coding over `SI-###` beside it | | | | |
+| H-11 | M-17 over `SI-###` (levels; amounts banded); inconclusive below 20 completed | | | | |
 | H-12 | M-15, M-18, hard stops | | | | |
 
 ### 4.1 Canonical funnel
@@ -88,7 +94,9 @@ fail / inconclusive with the metric value as a fraction and a percentage.
 | Code-entry completion of opens (M-09) | | | 80+ / 50–79 / below 50 |
 | Conversation-start rate (M-20) | | | reported |
 | Median conversations per listing; median messages per conversation (M-21) | | | `ASM-04` floor 3 |
+| Listing-level opens on the listing-body arm (`SLICE_0_SCORECARD.md` §1a), beside the contact-level figure | | | which figure the band used |
 | Per-channel breakdown | | | table attached |
+| Per-arm breakdown (listing_body / reply_only / phone_control) | | | table attached |
 
 ### 4.2 Workflow success
 
@@ -131,7 +139,9 @@ Address each control in `RECRUITMENT_PLAN.md` §7: relationship mix; moderated v
 real separation; operator over-performance (M-14 value); exclusions; leading questions
 (deviations logged); category and channel concentration; timing integrity; the
 human-not-AI disclosure (OVQ-01) and what it means for H-06; the self-reported baseline
-for M-05; anything else either founder believes weakened the evidence.
+for M-05; cohort integrity (every `SW-###` linked to one `SI-###`, no re-labelling, no
+buyer session counted as an interview, no founder item in the workflow denominator);
+anything else either founder believes weakened the evidence.
 
 ## 9. Hard-stop review
 

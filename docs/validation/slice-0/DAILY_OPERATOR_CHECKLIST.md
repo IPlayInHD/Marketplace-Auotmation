@@ -58,7 +58,10 @@ exist in the protected store or the manifest.
       `exclusion_decided_before_outcome` flag.
 - [ ] Confirm no row was edited after the review except to correct a documented
       transcription error (note the correction in `notes_ref`).
-- [ ] Confirm moderated rows are `population = moderated` and real rows are `real`.
+- [ ] Confirm moderated rows (`BM-###`) are `population = moderated` and real rows
+      (`RC-####`) are `real`; every real row has `listing_id`, `arm`, `exposure_basis`
+      and `open_attribution`; every `SW-###` row carries its `linked_si_id`; no interview
+      record was created from a buyer session or a workflow debrief.
 
 ## 5. Privacy cleanup (daily, and weekly review)
 

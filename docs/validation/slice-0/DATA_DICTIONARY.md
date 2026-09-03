@@ -20,8 +20,10 @@ DM-1).
 | SQ-1 … SQ-8 | text / enum | per `RECRUITMENT_PLAN.md` §6 | screening | yes | P2 | PS | A | M-02, H-01 |
 | eligible | bool | yes / no | screening | yes | P1 | PS→R | B | M-02 |
 | exclusion_rule | enum | X-1 … X-6 / none | screening | if not eligible | P1 | PS→R | B | M-02 |
-| enrolled | bool | yes / no | consent | yes | P1 | PS→R | B | M-01 |
-| participant_id | id | S-nn / B-nn | consent | yes | P1 | PS→R | B | all |
+| enrolled | enum | workflow (gave workflow consent) / interview_only / no | consent | yes | P1 | PS→R | B | M-01 |
+| participant_id | id | SI-### / SW-### / BM-### (`RECRUITMENT_PLAN.md` §8; real contacts are never in this log) | consent | yes | P1 | PS→R | B | all |
+| cohort | enum | SI / SW / BM (fixed at consent; a change is an incident, B-11) | consent | yes | P1 | PS→R | B | all denominators |
+| linked_si_id | id | SI-### for a workflow seller; none otherwise | consent | yes for SW | P1 | PS→R | B | double-count check (§8) |
 | relationship | enum | none / founder / family / team | consent | yes | P1 | PS→R | B | B-1 |
 | notice_version | text | version tag | consent | yes | P1 | PS→R | B | HS-06 |
 | audio_consent | bool | yes / no | consent | yes | P1 | PS | A | — |
@@ -32,6 +34,9 @@ DM-1).
 
 | Field | Type | Allowed values | Stage | Required | Sensitivity | Storage | Retention | Metric |
 |---|---|---|---|---|---|---|---|---|
+| si_id | id | SI-### (one per interviewed person) | interview | yes | P1 | PS→R | B | all interview metrics |
+| linked_sw_id | id | SW-### or none | interview | yes | P1 | PS→R | B | double-count check (`RECRUITMENT_PLAN.md` §8) |
+| relationship | enum | none / founder / family / team (copied from the recruitment log) | interview | yes | P1 | PS→R | B | M-17 denominator (`relationship = none` only); B-1 |
 | IV-01 … IV-32 | text | verbatim notes | interview | yes | P2 (may contain P3 in free text) | PS | A | H-01, H-09, H-10 |
 | conversations_per_month | int | ≥ 0 (coded from IV-07, IV-09) | interview | yes | P1 | PS→R | B | H-01 |
 | message_load_top_two | bool | yes / no (coded from IV-10 to IV-12) | interview | yes | P1 | PS→R | B | H-01 |
@@ -41,15 +46,16 @@ DM-1).
 | tier_selected | enum | none / FREE / RESELLER / PRO | interview | no | P1 | PS→R | B | M-17 |
 | commitment_level | int | 0 … 5 | interview | yes | P1 | PS→R | B | M-17 |
 | commitment_evidence_ref | id | EV-nnnn (signed note, scheduled date) | interview | if level ≥ 3 | P2 | PS (raw) / R (hash) | A raw, B hash | M-17 |
-| interview_completed | bool | yes / no | interview | yes | P1 | PS→R | B | — |
+| interview_completed | bool | yes / no | interview | yes | P1 | PS→R | B | `SI` denominator (M-17, H-11) |
 | interview_deviation | text | free | interview | no | P1 | PS→R | B | B-5 |
 
 ## 3. Seller scorecard (`SELLER_SCORECARD_TEMPLATE.csv`; PS→R)
 
 | Field | Type | Allowed values | Stage | Required | Sensitivity | Storage | Retention | Metric |
 |---|---|---|---|---|---|---|---|---|
-| workflow_id | id | WF-nn | start | yes | P1 | PS→R | B | all |
-| seller_id | id | S-nn | start | yes | P1 | PS→R | B | all |
+| workflow_id | id | WF-### (never an FI-###) | start | yes | P1 | PS→R | B | all |
+| seller_id | id | SW-### | start | yes | P1 | PS→R | B | all |
+| linked_si_id | id | SI-### of this seller's one interview | start | yes | P1 | PS→R | B | double-count check |
 | relationship | enum | none / founder / family / team | start | yes | P1 | PS→R | B | B-1 |
 | category | text | seller's category word (e.g. electronics, clothing, furniture, tools, kids, other) | start | yes | P1 | PS→R | B | B-6 |
 | channel_key | enum | `INT-052` keys | ST-04 | yes | P1 | PS→R | B | M-08, M-18 |
@@ -97,13 +103,16 @@ timestamps — P1, retention A, source of every `t_*` field.
 
 | Field | Type | Allowed values | Stage | Required | Sensitivity | Storage | Retention | Metric |
 |---|---|---|---|---|---|---|---|---|
-| contact_id | id | R-nnnn / B-nn | entry | yes | P1 | PS→R | B | all |
+| contact_id | id | RC-#### (real; an event, never a person) / BM-### (moderated) | entry | yes | P1 | PS→R | B | all |
 | population | enum | real / moderated | entry | yes | P1 | PS→R | B | denominators |
-| workflow_id | id | WF-nn | entry | yes | P1 | PS→R | B | M-21 |
+| listing_id | id | WF-### / FI-### | entry | yes | P1 | PS→R | B | M-21, M-19 listing-level |
+| arm | enum | listing_body / reply_only / phone_control / not_applicable (moderated) | entry | yes for real | P1 | PS→R | B | M-19 (`SLICE_0_SCORECARD.md` §1a) |
 | channel_key | enum | `INT-052` keys | entry | yes for real | P1 | PS→R | B | B-7 |
 | session_date | date | ISO | entry | yes | P1 | PS→R | B | — |
-| exposure_confirmed | bool | yes / no | entry | yes for real | P1 | PS→R | B | M-19 (OVQ-05) |
+| exposure_confirmed | bool | yes / no (derived: yes only when `exposure_basis` is body_visible or sent_in_reply) | entry | yes for real | P1 | PS→R | B | M-19 (OVQ-05) |
+| exposure_basis | enum | body_visible / sent_in_reply / none / not_unrecruited / not_applicable (moderated) | entry | yes for real | P1 | PS→R | B | M-19 (§1a) |
 | opened_url | enum | yes / no / helped | entry | yes | P1 | PS→R | B | M-19 |
+| open_attribution | enum | reference_suffix / code_submitted / self_reported / not_attributable / not_applicable (moderated) | entry | yes for real | P1 | PS→R | B | M-19 (§1a, OVQ-08) |
 | t_to_open_s | int | seconds | entry | moderated | P1 | PS→R | B | H-06 |
 | preview_noticed | text | verbatim or none | entry | moderated | P2 | PS (verbatim) / R (coded yes/no) | A / B | H-06 |
 | code_attempts | int | ≥ 0 | gate | yes | P1 | PS→R | B | H-06 |
@@ -138,6 +147,12 @@ timestamps — P1, retention A, source of every `t_*` field.
 Raw conversation transcript (PS): P2, treated as P3 (`DATA-268`), retention A. Optional
 pilot reply channel (OVQ-02): P2, PS only, deleted with the transcript, never in any row.
 
+Page-open log (founder-controlled host counter or access log; PS): per request the
+listing id, timestamp, optional `?r=RC-####` reference and code-entry result; no IP
+address kept beyond 7 days; no cookie; no third-party script (consent script DM-7,
+DM-10). P1, retention A. Source of `opened_url`, `open_attribution = reference_suffix`
+and `code_entered` for real contacts (`SLICE_0_SCORECARD.md` §1a).
+
 ## 5. Marketplace evidence (`MARKETPLACE_EVIDENCE_TEMPLATE.csv`; PS→R)
 
 Procedure and meaning of each field are in `MARKETPLACE_FEASIBILITY_PROTOCOL.md` §2.
@@ -157,7 +172,7 @@ Test 1, HS-01.
 | messages_permit_flow | enum | stated_yes / stated_no / not_addressed / unknown | policy reading | yes | P1 | PS→R | B | `INT-025` Q2 |
 | distinguishes_link_types | text | what the policy says, or `not_addressed` | policy reading | yes | P1 | PS→R | B | `INT-025` Q4 |
 | stated_enforcement | enum | removal / warning / restriction / suspension / not_stated | policy reading | yes | P1 | PS→R | B | `INT-025` Q6 |
-| visibility_test_listing | text | WF-nn, or `founder-owned:<item>` | live test | yes if tested | P1 | PS→R | B | M-08 |
+| visibility_test_listing | id | WF-### or FI-### | live test | yes if tested | P1 | PS→R | B | M-08 |
 | visibility_test_date | date | ISO | live test | yes if tested | P1 | PS→R | B | M-08 |
 | visible_after_24h | enum | yes / no / altered / not_checked | observation | yes | P1 | PS→R | B | M-08 |
 | visible_after_48h | enum | yes / no / altered / not_checked | observation | yes | P1 | PS→R | B | M-08 |
@@ -184,7 +199,7 @@ never filled in a real row.
 | incident_id | id | INC-nnn | yes | P1 | PS→R | B | HS review |
 | date_time | datetime | ISO | yes | P1 | PS→R | B | — |
 | reported_by | enum | founder_1 / founder_2 / participant | yes | P1 | PS→R | B | — |
-| workflow_id, contact_id | id | WF-nn, R-nnnn / B-nn / none | yes | P1 | PS→R | B | — |
+| workflow_id, contact_id | id | WF-### / FI-### / none; RC-#### / BM-### / none | yes | P1 | PS→R | B | — |
 | category | enum | HS-01 … HS-09 / marketplace_enforcement / abuse / playbook_deviation / participant_complaint / other | yes | P1 | PS→R | B | M-15, HS |
 | severity | enum | critical / major / minor | yes | P1 | PS→R | B | HS |
 | what_happened | text | free, IDs only, no personal data | yes | P2 | PS (full) / R (redacted) | A / B | — |
@@ -200,7 +215,8 @@ never filled in a real row.
 
 ## 7. Evidence manifest (`EVIDENCE_MANIFEST_TEMPLATE.md`; PS→R)
 
-Fields per that file: evidence_id (EV-nnnn), participant_id, workflow_id, evidence_type
+Fields per that file: evidence_id (EV-####), participant_id (SI-### / SW-### / BM-### /
+RC-#### / none), workflow_id (WF-### / FI-### / none), evidence_type
 (policy_capture / listing_screenshot / page_screenshot / draft_original /
 draft_tidied / approved_copy / transcript_summary / stopwatch_log / interview_notes /
 audio / commitment_note / incident_attachment / other), date, storage_location
@@ -213,4 +229,6 @@ person (none permitted). Retention B for the manifest; raw items A.
 Passwords, tokens, credentials; payment details; identity documents; buyer names,
 emails, phones or handles in any row; seller minimum price in any row; exact addresses;
 any valuation or "worth" figure; any field marked "estimated by the founders" for a
-result.
+result; any link between an `RC-####` event and a person, handle, contact route or
+device; any second identifier of the same kind for one person (one `SI-###` and at most
+one linked `SW-###`, never two of either).
