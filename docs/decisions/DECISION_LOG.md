@@ -390,3 +390,104 @@ plan assertions show row-level security or the queue cannot meet the p95 targets
 target row counts. `Q-07` resolves with a localisation requirement that forces a
 regional split (`DATA-325`). Any proposal for a second deployable, a broker or a second
 datastore.
+
+---
+
+## D-18 — Defer Slice 0 and authorize private-alpha development
+**Date** 2026-09-03 · **Status** Accepted · **Supersedes** the implementation-start reading of `planning/MVP_ROADMAP.md` `PLAN-007`, and the sentence under D-17 **Acceptance** that `PLAN-007` blocks Slice 1 until Slice 0 has produced a decision. D-17 is otherwise unchanged and remains Accepted.
+
+**Decision.** The founders defer the complete Slice 0 real-world validation exercise and
+authorize private-alpha implementation of the product without it.
+
+1. **Slice 0 remains incomplete and unpassed.** It has not run. No Slice 0 evidence
+   exists. No decision memo under `validation/slice-0/DECISION_MEMO_TEMPLATE.md` has
+   been produced or signed.
+2. **The founders knowingly accept the additional product and market risk.** `ASM-01`
+   to `ASM-05` and `BIZ-092` are unvalidated; Tests 1, 2 and 3 of
+   `business/RISK_REGISTER.md` §4 have not run; engineering investment now precedes the
+   evidence that `PLAN-001` and `BIZ-210` were written to obtain first.
+3. **Private-alpha implementation may begin**, starting with Slice 1 of
+   `planning/MVP_ROADMAP.md`, inside the boundaries below.
+4. **Development initially uses synthetic, fictional or founder-controlled test data
+   only**, consistent with `engineering/OPERATIONS.md` §1, where the `local` and `ci`
+   environments hold synthetic fixtures only (`OPS-500`, `DATA-110`).
+5. **The Slice 0 execution kit in `validation/slice-0/` remains canonical.** It is not
+   deleted, weakened, shortened or re-scored by this decision. Its status references are
+   updated only to cite this entry.
+6. **Complete validation is deferred to a later release gate:** `PLAN-007` part (b),
+   before public beta or general availability.
+7. **Slice 0, run as the kit specifies and producing a signed decision under its decision
+   gate, or a separately accepted replacement validation decision in this log, is
+   required before public beta or general availability.** Nothing in this entry
+   satisfies that requirement.
+8. **This decision may be reconsidered at any time** by either founder. Reconsideration
+   is recorded as a new entry, never by editing this one.
+
+**This decision does not mean** that Slice 0 passed, that market demand was proven, that
+willingness to pay was proven, that marketplace feasibility (Test 1) or buyer conversion
+(Test 2) was proven, or that any validation evidence exists. A document, message or
+interface that describes Slice 0 as complete, passed or evidenced is wrong.
+
+**Why.** The founders chose to begin building now and to run the validation before any
+public exposure rather than before any code. This entry records that choice and its
+cost; it does not argue that the cost is small. The structural controls the
+documentation set specifies — the authorization invariants, the deterministic guardrail
+engine, the buyer-safe projection, tenant isolation — do not depend on the market
+answers, so they can be built and tested on synthetic data without prejudging those
+answers. The market answers still decide whether what is built reaches the public.
+
+**Private-alpha boundaries.**
+
+| Permitted under this entry | Not authorized by this entry |
+|---|---|
+| Local development | Public launch of any surface |
+| Automated tests: unit, integration, contract, build, eval | Open user registration |
+| Synthetic test accounts and data | Collection of real participant information without an approved process (the consent script in `validation/slice-0/` for validation activity; `security/DATA_AND_PRIVACY.md` and `Q-07` for the product) |
+| Founder-operated internal demonstrations | Live payments or subscriptions; pricing stays unfixed (`BIZ-092`) |
+| Founder-controlled listings or simulations | Scraping any marketplace (`D-07`, `INT-060`) |
+| Development of the approved backend architecture (D-17) | Automated posting to marketplace accounts, or automated marketplace messaging (`D-07`) |
+| Development of the seller and buyer workflows behind non-public access | Collection of marketplace passwords or credentials (`INT-060`) |
+| | Representing Slice 0 as completed or passed |
+| | Removing seller approval from offers or negotiations (`D-13`, `AUTH-INV-04`) |
+| | Fabricating product facts (`D-10`, `INV-12`) |
+| | Bypassing marketplace policies (`INT-022`, `INT-032`) |
+
+"Behind non-public access" means: no buyer URL is published on any marketplace or public
+channel; no seller account exists for anyone other than the founders and synthetic
+personas; every listing in the alpha is founder-owned or fictional. A founder-controlled
+real listing that carries a buyer URL on a marketplace is a Slice 0 activity and runs
+under the kit's consent, privacy and evidence rules, not under this authorization.
+
+**Consequences.**
+
+- `planning/MVP_ROADMAP.md` `PLAN-007` is restated in two parts: (a) private-alpha
+  development authorization, granted by this entry; (b) public-release validation
+  authorization, which still requires Slice 0 or its accepted replacement. The Slice 0
+  section carries a status note. `PLAN-001`, the Slice 0 procedure, its arms, measures
+  and decision gate are unchanged.
+- `business/RISK_REGISTER.md` `BIZ-212` is annotated: its sequencing rule is a knowingly
+  accepted risk for private-alpha development and stays binding for public release.
+  Test 3 still gates the negotiation slice on real provider rates.
+- D-17's follow-ups apply unchanged under `PLAN-009`. Items 7 (formatter and linter) and
+  8 (authentication library, `Q-12`) precede the code they govern and are therefore
+  prerequisites for the first private-alpha code and for seller authentication
+  respectively. Items 1, 2, 4 and 5 complete before the public exposure of the
+  capability they name; item 6 before general availability.
+- In `validation/slice-0/`, `README.md`, `HYPOTHESIS_AND_REQUIREMENTS_MATRIX.md` and
+  `DECISION_MEMO_TEMPLATE.md` cite this entry where they referred to the old block. No
+  other kit content changes.
+- `CLAUDE.md` records the development status so every session reads the boundaries.
+- `Q-03` to `Q-07` and `Q-09` to `Q-12` remain open. Hosting and model provider are still
+  decided by their own entries before anything runs outside `local` and `ci`.
+
+**Rejected alternatives.** Running Slice 0 first, as specified: deferred by choice, not
+rejected on merit; it remains required. Declaring Slice 0 unnecessary, or substituting
+the alpha's own metrics for it: rejected, because alpha data is founder-controlled and
+cannot satisfy the real-buyer denominators of Test 2 or the channel evidence of Test 1.
+Reducing the kit's minimums to fit a shorter run: rejected (`SLICE_0_SCORECARD.md` §5
+rule 3).
+
+**Reconsideration triggers.** Either founder asks. Any private-alpha finding that bears
+on `ASM-01` to `ASM-05`, for example a founder-controlled listing removed by a
+marketplace or an internal demonstration in which the code gate is not understood. Any
+proposal to expose a surface to a non-founder. Any resolution of `Q-07`.

@@ -25,11 +25,22 @@ assumptions in this business are not engineering assumptions. They are:
 | `ASM-03` Sellers will type facts rather than expect inference | The listing flow is wrong |
 
 None of them requires software to test. Slice 0 tests all three for approximately
-nothing, and the answer changes what gets built next. **Do not skip it.**
+nothing, and the answer changes what gets built next. **Do not skip it.** Its timing
+changed on 2026-09-03: `decisions/DECISION_LOG.md` D-18 defers it behind private-alpha
+development and keeps it required before public release. See the status note under
+Slice 0 and `PLAN-007`.
 
 ---
 
 ## Slice 0 — Concierge validation (no product)
+
+**Status (D-18, 2026-09-03): deferred, incomplete, unpassed.** This slice has not run. No
+evidence exists, no decision memo has been signed, and nothing below is satisfied. D-18
+authorizes private-alpha implementation of Slice 1 onward without it, on synthetic,
+fictional or founder-controlled data behind non-public access, and keeps this slice
+required before public beta or general availability (`PLAN-007` part b). The procedure,
+the arms, the measures and the decision gate below are unchanged, and the execution kit
+in `validation/slice-0/` remains canonical.
 
 **Outcome.** A real answer to "will buyers actually do this?", from your own data,
 before any engineering investment.
@@ -64,10 +75,12 @@ warnings, reduced reach).
 The code-entry bands reconcile the thresholds previously stated here and in
 `business/RISK_REGISTER.md` §4 (D-17, C-09). They describe how Slice 0 data is read.
 They are not Slice 0 evidence: actual validation data from running this slice is still
-required, and `PLAN-007` stands. At the acceptance of the backend baseline D-17
-(2026-09-03) no Slice 0 validation evidence exists. Production code entry remains blocked
-by `PLAN-007` until it does; accepting an architecture decision is not validation
-evidence.
+required, and `PLAN-007` part (b) stands. At the acceptance of the backend baseline D-17
+(2026-09-03) no Slice 0 validation evidence existed, and none exists at D-18 (2026-09-03),
+which deferred this slice. Until D-18, `PLAN-007` blocked all production code entry; since
+D-18 it blocks public beta and general availability while private-alpha implementation
+proceeds inside D-18's boundaries. Accepting an architecture decision is not validation
+evidence, and neither is a deferral.
 
 **Out of scope.** Everything. This slice writes no production code.
 
@@ -261,7 +274,21 @@ intelligence. See `product/MASTER_PRODUCT_SPEC.md` §13 and §14.
 `PLAN-004` No slice ships without its security tests passing.
 `PLAN-005` Slice 5 does not start until the guardrail engine has ≥200 unit tests.
 `PLAN-006` Slice 2 does not ship until every test in `PUBLIC_ACCESS_SECURITY.md` §8 passes.
-`PLAN-007` Slice 1 does not start until Slice 0 has produced a decision.
+`PLAN-007` **Two-part release gate.** Restated by `decisions/DECISION_LOG.md` D-18 on
+2026-09-03; the original wording was "Slice 1 does not start until Slice 0 has produced a
+decision."
+(a) *Private-alpha development authorization.* Slice 1 and later slices may be
+implemented, tested and demonstrated behind non-public access, on synthetic, fictional
+or founder-controlled data, without a Slice 0 decision. Granted by D-18, which records
+that Slice 0 is deferred, incomplete and unpassed and that the founders accept the
+resulting product and market risk. Nothing in D-18's "not authorized" column is
+permitted by this part.
+(b) *Public-release validation authorization.* No public beta, open registration or
+general availability until Slice 0 has run as `validation/slice-0/` specifies and
+produced a signed decision whose required action under the Slice 0 decision gate has
+been taken, or until a separately accepted entry in `decisions/DECISION_LOG.md` replaces
+that validation. This part carries the substance of the original gate forward; only the
+point at which it bites moved, from the first line of implementation to public release.
 `PLAN-008` Slice 3 does not let a model reply reach any real buyer until every control in
 its Safety gate row exists and has passed its test, and until the `PLAN-002` shadow-mode
 exit threshold has been set (`Q-EV-01`). Advanced operational tooling stays in Slice 8.

@@ -162,3 +162,12 @@ viability. The three tests above are the ones where the answer might be "stop".
 negotiation, offer or approval slices until Tests 1 and 2 have run and reported.**
 Test 3 gates the negotiation slice specifically. This is the same conclusion `BIZ-072`
 reaches for acquisition spend, for the same reason.
+
+**Status of `BIZ-212` after D-18 (2026-09-03).** The founders deferred Slice 0 and
+authorized private-alpha development before Tests 1 and 2 have run
+(`decisions/DECISION_LOG.md` D-18). For private-alpha work behind non-public access, the
+`BIZ-212` rule is a risk the founders have knowingly accepted, not a prohibition. For
+public beta and general availability it stays binding: Tests 1 and 2 run and report, or
+an accepted replacement decision exists, before any public release
+(`planning/MVP_ROADMAP.md` `PLAN-007` part b). Test 3 is unaffected. Nothing here records
+a test result; none of the three tests has run.

@@ -67,6 +67,12 @@ judgment.
   server-rendered buyer pages. Do not assume anything beyond it. Hosting, model
   provider, notification providers and the authentication library remain undecided;
   raise each as a decision.
+- Development status is `docs/decisions/DECISION_LOG.md` D-18 (Accepted 2026-09-03):
+  Slice 0 validation is deferred, incomplete and unpassed, and private-alpha
+  implementation is authorized behind non-public access on synthetic, fictional or
+  founder-controlled data only. No public launch, open registration, real participant
+  data, live payments or subscriptions until `docs/planning/MVP_ROADMAP.md` `PLAN-007`
+  part (b) is met. Never describe Slice 0 as complete, passed or evidenced.
 
 ## Where to read before working
 

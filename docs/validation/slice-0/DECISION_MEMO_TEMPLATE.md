@@ -169,8 +169,10 @@ to be reopened with this evidence, not decided here.
 One of: **STOP** · **REWORK** · **RERUN** · **PASS**
 
 Justification in the order of `README.md` §6: hard stops, canonical gate, workflow unit,
-completeness. If PASS: this memo is the Slice 0 decision `PLAN-007` requires, and Slice 1
-may start subject to the D-17 follow-ups (`PLAN-009`). If RERUN or REWORK: what changes
+completeness. If PASS: this memo is the Slice 0 decision `PLAN-007` part (b) requires,
+and a public release may be considered subject to the D-17 follow-ups (`PLAN-009`) and
+every other gate; private-alpha implementation was separately authorized by D-18 and
+does not wait for this memo. If RERUN or REWORK: what changes
 before the next run, and which hypotheses are re-tested. If STOP: what is reconsidered.
 
 ## 12. Sign-off by both founders

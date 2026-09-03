@@ -8,7 +8,11 @@ not evidence. It operationalises Slice 0 of `planning/MVP_ROADMAP.md` and Tests 
 procedure. A template with no participant data in it proves nothing; a filled scorecard in
 the protected store, hashed in the evidence manifest and summarised in a signed decision
 memo, is evidence. Until that memo exists, Slice 0 has not produced a decision and
-`PLAN-007` blocks Slice 1.
+`PLAN-007` part (b) blocks public beta and general availability.
+
+**Status (D-18, 2026-09-03): deferred, incomplete, unpassed.** `decisions/DECISION_LOG.md`
+D-18 authorizes private-alpha implementation without this validation and leaves this kit
+canonical and unchanged in substance. No evidence exists. Nothing here has been run.
 
 ---
 
