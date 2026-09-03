@@ -233,6 +233,7 @@ overrides learned preference.
 ## 12. Required audit events
 
 `LISTING_CREATED` · `LISTING_CONTENT_ENHANCED` · `LISTING_CONTENT_APPROVED` ·
+`LISTING_ASKING_PRICE_CHANGED` · `LISTING_STATUS_CHANGED` ·
 `SELLER_POLICY_CHANGED` · `MINIMUM_PRICE_CHANGED` · `ACCESS_CODE_CREATED` ·
 `ACCESS_CODE_ROTATED` · `ACCESS_CODE_REVOKED` · `BUYER_SESSION_CREATED` ·
 `OFFER_CREATED` · `OFFER_CHANGED` · `COUNTEROFFER_SENT` · `SELLER_ACTION_REQUIRED` ·
@@ -241,3 +242,15 @@ overrides learned preference.
 `GUARDRAIL_DENIED` · `ESCALATED_TO_SELLER`
 
 No secrets, no access codes, no unnecessary personal data in audit payloads.
+
+`LISTING_STATUS_CHANGED` records every successful listing lifecycle transition of
+`architecture/STATE_MACHINES.md` §1 with the previous and new status.
+`LISTING_ASKING_PRICE_CHANGED` records every successful change of a listing's asking price or
+currency with the previous and new values; the asking price is information the seller
+publishes (`security/DATA_AND_PRIVACY.md` §3.1, §8). Both carry the actor, the seller, the
+listing, the policy version in force, the request id and the idempotency key, and are written
+in the same transaction as the change they record (`OPS-780`, `OPS-781`, `OPS-784`,
+`OPS-787`). Neither payload, nor any other audit payload, ever carries the minimum price
+(`AUTH-INV-08`, `OPS-569`). Both were added on 2026-09-03 to complete `OPS-781` for the
+listing lifecycle and the asking price, which are consequential actions this list did not
+name; this is completion of an existing requirement, not a new decision.

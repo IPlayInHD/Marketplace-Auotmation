@@ -128,10 +128,12 @@ only by `withTenant()`. `app.current_seller_id()` returns `NULLIF(current_settin
 - **Listing status** changes only along STATE_MACHINES §1 edges, enforced by a trigger; READY
   additionally requires the SM-L-01 prerequisites, and the refusal names what is missing
   (`SQLSTATE LS002`, DETAIL). `row_version` must advance by exactly one on every update.
-- **Audit event types** are the §12 list of `ai/POLICY_AND_AUTHORIZATION.md` plus
-  `LISTING_STATUS_CHANGED`, which records a lifecycle transition (a consequential action under
-  `OPS-780` that §12 does not name). Asking-price changes are written with their request id but
-  §12 names no event for them; recording one is a follow-up for the decision log.
+- **Audit event types** are exactly the §12 list of `ai/POLICY_AND_AUTHORIZATION.md`, which since
+  2026-09-03 names `LISTING_STATUS_CHANGED` (every lifecycle transition, previous and new status)
+  and `LISTING_ASKING_PRICE_CHANGED` (every asking-price or currency change, previous and new
+  values, never the minimum). A unit test and an integration test keep the document, the
+  TypeScript list and the database enum identical (`OPS-781`). Submitting the asking price a
+  listing already carries is an idempotent no-op: no write, no event.
 - Layouts that DOMAIN_MODEL.md leaves indicative (policy fields, fact keys) are fixed here as the
   LIST-002 and LIST-022 lists. If the founders read any of this as a deviation from the domain
   model, it is recorded in the decision log, per that document's own rule.

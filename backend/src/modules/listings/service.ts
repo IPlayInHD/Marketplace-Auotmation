@@ -194,19 +194,57 @@ async function updateListingRow(
   throw new ConcurrentModificationError('listing');
 }
 
-/** LIST-130: the seller sets the asking price. Nothing suggests one (D-09). */
+function sameMoney(a: Money | null, b: Money): boolean {
+  return a !== null && a.amountMinor === b.amountMinor && a.currency === b.currency;
+}
+
+/**
+ * LIST-130: the seller sets the asking price; nothing suggests one (D-09). A change is a
+ * consequential action, audited as LISTING_ASKING_PRICE_CHANGED under the seller's idempotency
+ * key in the same transaction as the write (OPS-780, OPS-781, OPS-787). The previous and new
+ * asking price are seller-published information (DATA_AND_PRIVACY §3.1, §8) and appear in the
+ * payload; the minimum price never does. Submitting the price the listing already carries is an
+ * idempotent no-op: nothing is written and no change event is recorded.
+ */
 export async function setAskingPrice(
   trx: TenantTransaction,
-  ctx: WriteContext,
+  ctx: CommandContext,
   input: { listingId: string; price: Money; expectedRowVersion: number },
 ): Promise<ListingRecord> {
   const price = MoneySchema.parse(input.price);
   const listing = await getListing(trx, input.listingId);
-  requireStatus(listing, 'DRAFT', 'change its asking price');
-  return updateListingRow(trx, ctx, listing.id, input.expectedRowVersion, {
-    asking_price_minor: price.amountMinor,
-    currency: price.currency,
+  const stored = await audit.findAuditEventByIdempotencyKey(trx, ctx.sellerId, ctx.idempotencyKey);
+  if (stored === undefined) {
+    requireStatus(listing, 'DRAFT', 'change its asking price');
+    if (sameMoney(listing.askingPrice, price)) return listing;
+  }
+  const outcome = await audit.runIdempotent<ListingRecord>(trx, ctx, {
+    eventType: 'LISTING_ASKING_PRICE_CHANGED',
+    subjectType: 'listing',
+    subjectId: listing.id,
+    run: async () => {
+      const updated = await updateListingRow(trx, ctx, listing.id, input.expectedRowVersion, {
+        asking_price_minor: price.amountMinor,
+        currency: price.currency,
+      });
+      return {
+        value: updated,
+        subjectId: updated.id,
+        ...(updated.currentPolicyVersionId !== null
+          ? { policyVersionId: updated.currentPolicyVersionId }
+          : {}),
+        summary: {
+          previous_asking_price_minor: listing.askingPrice?.amountMinor ?? null,
+          previous_currency: listing.askingPrice?.currency ?? null,
+          asking_price_minor: price.amountMinor,
+          currency: price.currency,
+          row_version: updated.rowVersion,
+        },
+      };
+    },
+    replay: () => getListing(trx, listing.id),
   });
+  return outcome.value;
 }
 
 export interface ApproveContentResult {

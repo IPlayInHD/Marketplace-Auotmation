@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { APP_SCHEMA, MIGRATION_SCHEMA, ROLES } from '../../src/db/constants.ts';
 import { defaultMigrationsDirectory, listMigrations, runMigrations } from '../../src/db/migrate.ts';
+import { AUDIT_EVENT_TYPES } from '../../src/db/schema.ts';
 import { startDatabase, type TestDatabase } from '../helpers/database.ts';
 import { query } from '../helpers/inspect.ts';
 
@@ -21,7 +22,7 @@ describe('Migrations', () => {
 
   it('apply cleanly to a fresh database, record the ledger, and are a no-op when re-run', async () => {
     const first = await runMigrations(env.migratorUrl);
-    expect(first.applied).toEqual(['0001_listing_foundation.sql']);
+    expect(first.applied).toEqual(['0001_listing_foundation.sql', '0002_listing_asking_price_event.sql']);
     expect(first.alreadyApplied).toEqual([]);
 
     const ledger = await query<{ name: string; checksum: string }>(
@@ -33,7 +34,10 @@ describe('Migrations', () => {
 
     const second = await runMigrations(env.migratorUrl);
     expect(second.applied).toEqual([]);
-    expect(second.alreadyApplied).toEqual(['0001_listing_foundation.sql']);
+    expect(second.alreadyApplied).toEqual([
+      '0001_listing_foundation.sql',
+      '0002_listing_asking_price_event.sql',
+    ]);
   });
 
   it('refuse a migration file that changed after it was applied (forward-only, no rewrite)', async () => {
@@ -134,6 +138,14 @@ describe('Migrations', () => {
       /(estimat|valuation|worth|market|comparable|suggest|demand)/i.test(c.column_name),
     );
     expect(valuation).toEqual([]);
+  });
+
+  it('give the database exactly the audit event types of the canonical catalogue (OPS-781)', async () => {
+    const rows = await query<{ value: string }>(
+      env.superuserUrl,
+      `SELECT unnest(enum_range(NULL::${APP_SCHEMA}.audit_event_type))::text AS value`,
+    );
+    expect(rows.map((r) => r.value).sort()).toEqual([...AUDIT_EVENT_TYPES].sort());
   });
 
   it('keep the migration ledger out of the runtime role’s reach', async () => {

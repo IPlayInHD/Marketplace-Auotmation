@@ -55,10 +55,12 @@ describe('Listing lifecycle: DRAFT to READY', () => {
     );
     expect(events.map((e) => e.eventType)).toEqual([
       'LISTING_CREATED',
+      'LISTING_ASKING_PRICE_CHANGED',
       'SELLER_POLICY_CHANGED',
       'MINIMUM_PRICE_CHANGED',
       'LISTING_STATUS_CHANGED',
     ]);
+    expect(events.filter((e) => e.eventType === 'LISTING_STATUS_CHANGED')).toHaveLength(1);
     const transition = events.at(-1);
     expect(transition).toMatchObject({
       actorType: 'SELLER',
@@ -297,6 +299,7 @@ describe('Listing lifecycle: DRAFT to READY', () => {
       audit.listAuditEventsForSubject(trx, sellerA, 'listing', built.listingId),
     );
     const transitions = events.filter((e) => e.eventType === 'LISTING_STATUS_CHANGED').map((e) => e.summary);
+    expect(transitions).toHaveLength(2);
     expect(transitions).toEqual([
       { from: 'DRAFT', to: 'READY', row_version: ready.rowVersion },
       { from: 'READY', to: 'DRAFT', row_version: draft.rowVersion },
