@@ -1,0 +1,168 @@
+import type { ColumnType, Generated, JSONColumnType } from 'kysely';
+
+// Kysely table types for schema `app` (see src/db/migrations). Table keys are unqualified because
+// the Kysely instance is created with withSchema('app') (src/db/kysely.ts).
+//
+// bigint money columns arrive as JavaScript numbers through the safe-integer parser installed in
+// src/db/kysely.ts; `date` columns arrive as ISO strings.
+
+export type ListingStatus =
+  | 'DRAFT'
+  | 'READY'
+  | 'LISTED'
+  | 'ACTIVE_CONVERSATIONS'
+  | 'OFFER_PENDING'
+  | 'PENDING_SALE'
+  | 'SOLD'
+  | 'CANCELLED'
+  | 'ARCHIVED'
+  | 'EXPIRED';
+
+export type ContentProvenance = 'SELLER_PROVIDED_FACT' | 'AI_ENHANCED_COPY' | 'SELLER_APPROVED_COPY';
+
+export type ContentVersionStatus =
+  | 'SELLER_DRAFT'
+  | 'ENHANCEMENT_PENDING'
+  | 'ENHANCED'
+  | 'ENHANCEMENT_FAILED'
+  | 'SELLER_EDITED'
+  | 'APPROVED'
+  | 'SUPERSEDED';
+
+export type LocationDisclosureMode = 'NONE' | 'AREA';
+
+export type AuditActorType = 'SELLER' | 'BUYER_SESSION' | 'SYSTEM' | 'MODEL';
+
+export type AuditEventType =
+  | 'LISTING_CREATED'
+  | 'LISTING_CONTENT_ENHANCED'
+  | 'LISTING_CONTENT_APPROVED'
+  | 'SELLER_POLICY_CHANGED'
+  | 'MINIMUM_PRICE_CHANGED'
+  | 'ACCESS_CODE_CREATED'
+  | 'ACCESS_CODE_ROTATED'
+  | 'ACCESS_CODE_REVOKED'
+  | 'BUYER_SESSION_CREATED'
+  | 'OFFER_CREATED'
+  | 'OFFER_CHANGED'
+  | 'COUNTEROFFER_SENT'
+  | 'SELLER_ACTION_REQUIRED'
+  | 'SELLER_APPROVED'
+  | 'SELLER_DECLINED'
+  | 'SELLER_COUNTERED'
+  | 'APPROVAL_INVALIDATED'
+  | 'BUYER_ACCEPTANCE_COMMUNICATED'
+  | 'DEAL_PENDING'
+  | 'DEAL_CANCELLED'
+  | 'LISTING_SOLD'
+  | 'GUARDRAIL_DENIED'
+  | 'ESCALATED_TO_SELLER'
+  | 'LISTING_STATUS_CHANGED';
+
+type Timestamp = ColumnType<Date, Date | string | undefined, Date | string>;
+
+export interface SellerTable {
+  id: string;
+  display_name: string;
+  created_at: Generated<Date>;
+  updated_at: Generated<Date>;
+}
+
+export interface InventoryItemTable {
+  id: Generated<string>;
+  seller_id: string;
+  acquisition_cost_minor: number | null;
+  acquisition_currency: string | null;
+  acquisition_date: string | null;
+  request_id: string;
+  created_at: Generated<Date>;
+  updated_at: Generated<Date>;
+}
+
+export interface ListingTable {
+  id: Generated<string>;
+  seller_id: string;
+  inventory_item_id: string;
+  status: ColumnType<ListingStatus, ListingStatus | undefined, ListingStatus>;
+  asking_price_minor: number | null;
+  currency: string | null;
+  current_content_version_id: string | null;
+  current_policy_version_id: string | null;
+  row_version: Generated<number>;
+  request_id: string;
+  created_at: Generated<Date>;
+  updated_at: Timestamp;
+}
+
+export interface ListingContentVersionTable {
+  id: Generated<string>;
+  seller_id: string;
+  listing_id: string;
+  version_number: number;
+  status: ContentVersionStatus;
+  provenance: ContentProvenance;
+  title: string;
+  summary: string | null;
+  description: string | null;
+  structured_details: JSONColumnType<Record<string, string>>;
+  source_version_id: string | null;
+  request_id: string;
+  created_at: Generated<Date>;
+  approved_at: Date | null;
+  approved_by: string | null;
+}
+
+export interface ProductFactTable {
+  id: Generated<string>;
+  seller_id: string;
+  listing_id: string;
+  key: string;
+  value: string;
+  provenance: ContentProvenance;
+  supplied_at: Generated<Date>;
+  request_id: string;
+}
+
+export interface SellerPolicyVersionTable {
+  id: Generated<string>;
+  seller_id: string;
+  listing_id: string;
+  version_number: number;
+  minimum_price_minor: number;
+  currency: string;
+  negotiation_enabled: boolean;
+  max_autonomous_concession_minor: number | null;
+  trades_allowed: boolean;
+  delivery_allowed: boolean;
+  pickup_allowed: boolean;
+  location_disclosure_mode: LocationDisclosureMode;
+  hold_window_seconds: number | null;
+  request_id: string;
+  created_at: Generated<Date>;
+}
+
+export interface AuditEventTable {
+  id: Generated<string>;
+  seq: Generated<number>;
+  seller_id: string;
+  event_type: AuditEventType;
+  actor_type: AuditActorType;
+  actor_ref: string | null;
+  subject_type: string;
+  subject_id: string;
+  policy_version_id: string | null;
+  request_id: string;
+  idempotency_key: string | null;
+  summary: JSONColumnType<Record<string, unknown>>;
+  created_at: Generated<Date>;
+}
+
+export interface Database {
+  seller: SellerTable;
+  inventory_item: InventoryItemTable;
+  listing: ListingTable;
+  listing_content_version: ListingContentVersionTable;
+  product_fact: ProductFactTable;
+  seller_policy_version: SellerPolicyVersionTable;
+  audit_event: AuditEventTable;
+}
