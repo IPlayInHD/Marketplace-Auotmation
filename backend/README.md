@@ -47,7 +47,8 @@ TypeScript 6.0.3 with `strict` and the settings in `tsconfig.json`; Vitest 4.1.1
 
 ## Prerequisites
 
-- Node.js 24 LTS (developed on 24.20.0) and npm 11.
+- Node.js 24 LTS and npm 11. `.node-version` pins the exact release the backend is developed and
+  verified on; CI installs that release.
 - Docker with a reachable daemon, for the integration tests. No local PostgreSQL is used.
 - Network access to pull `postgres:16-alpine` and `testcontainers/ryuk:0.14.0`, directly or
   through a mirror:
@@ -148,6 +149,30 @@ only by `withTenant()`. `app.current_seller_id()` returns `NULLIF(current_settin
 - Layouts that DOMAIN_MODEL.md leaves indicative (policy fields, fact keys) are fixed here as the
   LIST-002 and LIST-022 lists. If the founders read any of this as a deviation from the domain
   model, it is recorded in the decision log, per that document's own rule.
+
+## Continuous integration
+
+`.github/workflows/backend.yml` runs on pull requests, on pushes to `main` and to `claude/**`
+branches, and by manual dispatch, filtered to `backend/**`, the workflow and its script, and the
+canonical audit-event catalogue that `test/unit/audit-catalogue.test.ts` reads. Two jobs on a
+GitHub-hosted `ubuntu-24.04` runner, both with a read-only token (`contents: read`), no secret
+and no deploy step (`SEC-384`); actions pinned to commit SHAs and the PostgreSQL image to the
+digest above (`SEC-385`); `npm ci --ignore-scripts` from the committed lockfile (`SEC-380`).
+
+- **verify**: `format:check`, `lint`, `typecheck`, `depcruise`, `test:unit`, the migration
+  tests alone, then the whole PostgreSQL integration suite under Testcontainers. Any failure
+  fails the job. Superseded runs on the same ref are cancelled.
+- **audit** (`SEC-382`): `.github/scripts/npm-audit.sh` fails on a confirmed vulnerability with
+  the report, and fails separately, saying so, when the advisory service cannot be reached after
+  three attempts. An outage is reported as "not assessed", never as clean, and cannot affect the
+  `verify` result.
+
+`OPS-714` in CI: the forward-only runner, its checksum ledger and the schema scans run against a
+fresh database on every change. The requirement's other half, running migrations against a
+database loaded with production-shaped volumes, is not done here: no production data exists
+(D-18) and no synthetic volume model has been authorised. It remains an explicit follow-up.
+The Testcontainers reaper image `testcontainers/ryuk:0.14.0` is pinned by tag by the library;
+version 12.1.0 offers no digest override.
 
 ## Tests
 

@@ -1,0 +1,120 @@
+# Backend verification for the D-17 baseline under the D-18 private alpha.
+#
+# Least privilege: the job token is read-only (`contents: read`) and nothing here holds a secret,
+# a credential or a deploy step (SEC-384). Actions are pinned to immutable commit SHAs and the
+# PostgreSQL test image to its digest (SEC-385); dependencies install from the committed lockfile
+# only (SEC-380). The correctness suite and the dependency audit (SEC-382) are separate jobs, so an
+# advisory-service outage cannot make the correctness result nondeterministic.
+#
+# Path filters: a change to documentation runs nothing here, except the canonical audit-event
+# catalogue, which test/unit/audit-catalogue.test.ts reads (OPS-781). GitHub Actions does not
+# support YAML anchors, so the list appears twice.
+name: backend
+
+on:
+  pull_request:
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend.yml'
+      - '.github/scripts/**'
+      - 'docs/ai/POLICY_AND_AUTHORIZATION.md'
+  push:
+    branches:
+      - main
+      - 'claude/**'
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend.yml'
+      - '.github/scripts/**'
+      - 'docs/ai/POLICY_AND_AUTHORIZATION.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # backend/README.md "PostgreSQL test image": the tag is mutable, the digest is not (SEC-385).
+  BACKEND_POSTGRES_IMAGE: postgres@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+  # Pull Docker Hub images through the mirror the README documents, clear of anonymous pull
+  # limits. With the digest above, the source cannot change what runs.
+  TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: mirror.gcr.io/
+
+jobs:
+  verify:
+    name: verify backend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Check out
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js (backend/.node-version)
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version-file: backend/.node-version
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install from the lockfile only (SEC-380)
+        run: npm ci --ignore-scripts
+
+      - name: Formatting
+        run: npm run format:check
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: TypeScript
+        run: npm run typecheck
+
+      - name: Module boundaries (dependency-cruiser)
+        run: npm run depcruise
+
+      - name: Unit tests
+        run: npm run test:unit
+
+      # OPS-714, CI portion: the forward-only runner, its ledger and the schema scans run against
+      # a fresh PostgreSQL container on every change. The production-shaped-volume portion of
+      # OPS-714 is not run here; see backend/README.md "Continuous integration".
+      - name: Migration tests
+        run: npm run test:integration -- test/integration/migrations.test.ts
+
+      - name: PostgreSQL integration tests (Testcontainers)
+        run: npm run test:integration
+
+  audit:
+    name: dependency audit (SEC-382)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Check out
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js (backend/.node-version)
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version-file: backend/.node-version
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install from the lockfile only (SEC-380)
+        run: npm ci --ignore-scripts
+
+      # Fails on a confirmed vulnerability with the report, and fails, saying so explicitly, when
+      # the advisory service cannot be reached: "not assessed" is never reported as clean.
+      - name: npm audit
+        run: ../.github/scripts/npm-audit.sh
