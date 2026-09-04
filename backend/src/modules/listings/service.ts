@@ -8,6 +8,7 @@ import {
   ListingNotReadyError,
   mapDatabaseError,
   NotFoundError,
+  RelistContentRequiredError,
   type ReadinessGap,
 } from '../../shared/errors.ts';
 import { parseBuyerOrigin } from '../../shared/buyer-url.ts';
@@ -45,6 +46,8 @@ export interface ListingRecord {
   listedAt: Date | null;
   /** Database time of entry to SOLD, CANCELLED, ARCHIVED or EXPIRED; null while open or after a relist. */
   closedAt: Date | null;
+  /** The content version the latest publication used (SM-L-06); set by the database on entry to LISTED. */
+  publishedContentVersionId: string | null;
 }
 
 interface ListingRow {
@@ -61,6 +64,7 @@ interface ListingRow {
   updated_at: Date;
   listed_at: Date | null;
   closed_at: Date | null;
+  published_content_version_id: string | null;
 }
 
 function toListing(row: ListingRow): ListingRecord {
@@ -80,6 +84,7 @@ function toListing(row: ListingRow): ListingRecord {
     updatedAt: row.updated_at,
     listedAt: row.listed_at,
     closedAt: row.closed_at,
+    publishedContentVersionId: row.published_content_version_id,
   };
 }
 
@@ -101,6 +106,7 @@ const StoredListing = z.object({
   updatedAt: z.coerce.date(),
   listedAt: z.coerce.date().nullable(),
   closedAt: z.coerce.date().nullable(),
+  publishedContentVersionId: z.uuid().nullable(),
 });
 
 function storeListing(listing: ListingRecord): Record<string, unknown> {
@@ -319,6 +325,8 @@ export interface ApproveContentResult {
  * version is superseded in the same transaction (SM-CT-01, SM-CT-02). Audited as
  * LISTING_CONTENT_APPROVED under the seller's idempotency key. The receipt keeps the listing and
  * the version id; the approved words are immutable (SM-CT-04), so a replay reads them back.
+ * Approval is a DRAFT action, and also an EXPIRED one: SM-L-06 and OPS-219 require the seller to
+ * approve a new version before relisting, and nothing is approved on the seller's behalf.
  */
 export async function approveContent(
   trx: TenantTransaction,
@@ -333,7 +341,9 @@ export async function approveContent(
     run: async () => {
       const listing = await getListing(trx, input.listingId);
       const version = await content.getVersion(trx, listing.id, input.versionId);
-      requireStatus(listing, 'DRAFT', 'approve content');
+      if (listing.status !== 'DRAFT' && listing.status !== 'EXPIRED') {
+        throw new InvalidStateError('listing', listing.status, 'approve content');
+      }
       if (version.status !== 'SELLER_DRAFT') {
         throw new InvalidStateError('content_version', version.status, 'be approved');
       }
@@ -667,6 +677,7 @@ export async function markListed(
           to: 'LISTED',
           row_version: updated.rowVersion,
           public_access_id: access.id,
+          content_version_id: updated.publishedContentVersionId,
         },
       };
     },
@@ -674,6 +685,26 @@ export async function markListed(
     revive: revivePublished,
   });
   return outcome.value;
+}
+
+/**
+ * SM-L-06 as the application sees it: the current content version must not be the one the previous
+ * publication used, and must have been created and approved after that publication. The database
+ * refuses the same cases (LS007); this check names them before the write is attempted.
+ */
+async function requireNewContentForRelist(trx: TenantTransaction, listing: ListingRecord): Promise<void> {
+  if (listing.currentContentVersionId === null) throw new RelistContentRequiredError();
+  const version = await content.getVersion(trx, listing.id, listing.currentContentVersionId);
+  const previous = listing.listedAt?.getTime() ?? 0;
+  if (
+    version.id === listing.publishedContentVersionId ||
+    version.status !== 'APPROVED' ||
+    version.approvedAt === null ||
+    version.createdAt.getTime() <= previous ||
+    version.approvedAt.getTime() <= previous
+  ) {
+    throw new RelistContentRequiredError();
+  }
 }
 
 export interface CloseListingResult {
@@ -772,8 +803,8 @@ export function cancelListing(
  * STATE_MACHINES §1: LISTED → EXPIRED, the optional expiry. An internal domain command with no
  * schedule: nothing in this slice decides when a listing expires, and no caller-supplied time is
  * trusted. The closing time is the database clock (closed_at). The ACTIVE code becomes EXPIRED
- * ("expiry reached", STATE_MACHINES §2); the catalogue has no code-expiry event, so the listing's
- * LISTING_STATUS_CHANGED event records the code's terminal status and version.
+ * ("expiry reached", STATE_MACHINES §2), audited as ACCESS_CODE_EXPIRED in the same transaction;
+ * the listing's LISTING_STATUS_CHANGED event also records the code's terminal status and version.
  */
 export function expireListing(
   trx: TenantTransaction,
@@ -797,13 +828,17 @@ export function archiveListing(
 }
 
 /**
- * STATE_MACHINES §1, SM-L-06: EXPIRED → LISTED on the same listing. The SM-L-01 prerequisites are
- * revalidated in full (approved copy current, asking price, policy version, currency match, facts
- * backing every detail); the same public access is re-enabled, so the buyer URL is preserved
- * (BUYER-003, DM-09); a fresh code version is issued and audited as ACCESS_CODE_CREATED, and no
- * earlier code returns to ACTIVE. Relisting from CANCELLED is not drawn: per OPS-215 it is a new
- * listing on the same item through the ordinary DRAFT → READY → LISTED path. The plaintext code
- * and the copy block are present only on the first successful execution.
+ * STATE_MACHINES §1, SM-L-06, OPS-216, OPS-219: EXPIRED → LISTED on the same listing. The
+ * SM-L-01 prerequisites are revalidated in full (approved copy current, asking price, policy
+ * version, currency match, facts backing every detail), and the current content version must be
+ * a different one from the previous publication's, created and explicitly approved by the seller
+ * after it: nothing is cloned or re-approved on the seller's behalf, and the earlier version stays
+ * in history as SUPERSEDED. The data layer enforces the same rule (LS007). The same public access
+ * is re-enabled, so the buyer URL is preserved (BUYER-003, DM-09); a fresh code version is issued
+ * and audited as ACCESS_CODE_CREATED, and no earlier code returns to ACTIVE. Relisting from
+ * CANCELLED is not drawn: per OPS-215 it is a new listing on the same item through the ordinary
+ * DRAFT → READY → LISTED path. The plaintext code and the copy block are present only on the
+ * first successful execution.
  */
 export async function relistListing(
   trx: TenantTransaction,
@@ -822,6 +857,7 @@ export async function relistListing(
       if (listing.rowVersion !== input.expectedRowVersion) throw new ConcurrentModificationError('listing');
       const gaps = await readinessGaps(trx, listing);
       if (gaps.length > 0) throw new ListingNotReadyError(gaps);
+      await requireNewContentForRelist(trx, listing);
       const { access, code } = await openAccessAndIssue(trx, ctx, listing);
       const updated = await updateListingRow(trx, ctx, listing.id, input.expectedRowVersion, {
         status: 'LISTED',
@@ -838,6 +874,8 @@ export async function relistListing(
           row_version: updated.rowVersion,
           public_access_id: access.id,
           access_version_number: code.versionNumber,
+          content_version_id: updated.publishedContentVersionId,
+          previous_content_version_id: listing.publishedContentVersionId,
         },
       };
     },

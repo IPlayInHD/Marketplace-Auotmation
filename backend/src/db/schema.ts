@@ -55,6 +55,7 @@ export const AUDIT_EVENT_TYPES = [
   'ACCESS_CODE_CREATED',
   'ACCESS_CODE_ROTATED',
   'ACCESS_CODE_REVOKED',
+  'ACCESS_CODE_EXPIRED',
   'BUYER_SESSION_CREATED',
   'OFFER_CREATED',
   'OFFER_CHANGED',
@@ -110,6 +111,8 @@ export interface ListingTable {
   listed_at: Generated<Date | null>;
   /** Set by the lifecycle trigger from the database clock on entry to a closing state; cleared on relist. */
   closed_at: Generated<Date | null>;
+  /** The content version each publication used; set by the publication trigger on entry to LISTED (migration 0006). */
+  published_content_version_id: Generated<string | null>;
 }
 
 export interface ListingContentVersionTable {

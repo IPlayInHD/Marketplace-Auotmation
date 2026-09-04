@@ -28,6 +28,7 @@ describe('Migrations', () => {
       '0003_idempotency_receipt.sql',
       '0004_public_access.sql',
       '0005_listed_lifecycle.sql',
+      '0006_relist_content_and_code_expiry.sql',
     ]);
     expect(first.alreadyApplied).toEqual([]);
 
@@ -46,6 +47,7 @@ describe('Migrations', () => {
       '0003_idempotency_receipt.sql',
       '0004_public_access.sql',
       '0005_listed_lifecycle.sql',
+      '0006_relist_content_and_code_expiry.sql',
     ]);
   });
 

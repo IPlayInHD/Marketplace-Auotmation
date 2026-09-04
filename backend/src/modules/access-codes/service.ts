@@ -289,9 +289,9 @@ export interface ClosedAccess {
 /**
  * SM-L-02: closes the surface when a listing closes. Disables the access and moves the ACTIVE code
  * to its terminal status: REVOKED when the seller cancels ("listing closes" in STATE_MACHINES §2,
- * audited as ACCESS_CODE_REVOKED) or EXPIRED when the listing expires ("expiry reached"; the
- * catalogue has no code-expiry event, so the listing's status event records it). Not a command:
- * the caller's lifecycle command owns the key and the primary event.
+ * audited as ACCESS_CODE_REVOKED) or EXPIRED when the listing expires ("expiry reached", audited
+ * as ACCESS_CODE_EXPIRED). Not a command: the caller's lifecycle command owns the key and the
+ * primary event; both code events ride in its transaction (OPS-787).
  */
 export async function closeAccess(
   trx: TenantTransaction,
@@ -310,24 +310,22 @@ export async function closeAccess(
   const active = await findActiveAccessCode(trx, access.id);
   if (!active) return { access, closed: undefined };
   const closed = await leaveActive(trx, ctx, active, input.terminal);
-  if (input.terminal === 'REVOKED') {
-    await audit.appendAuditEvent(trx, ctx.sellerId, {
-      eventType: 'ACCESS_CODE_REVOKED',
-      actorType: 'SELLER',
-      actorRef: ctx.sellerId,
-      subjectType: 'listing_access_code',
-      subjectId: closed.id,
-      ...(input.policyVersionId !== undefined ? { policyVersionId: input.policyVersionId } : {}),
-      requestId: ctx.requestId,
-      summary: {
-        public_access_id: access.id,
-        listing_id: access.listingId,
-        version_number: closed.versionNumber,
-        surface_enabled: false,
-        cause: 'listing_closed',
-      },
-    });
-  }
+  await audit.appendAuditEvent(trx, ctx.sellerId, {
+    eventType: input.terminal === 'REVOKED' ? 'ACCESS_CODE_REVOKED' : 'ACCESS_CODE_EXPIRED',
+    actorType: 'SELLER',
+    actorRef: ctx.sellerId,
+    subjectType: 'listing_access_code',
+    subjectId: closed.id,
+    ...(input.policyVersionId !== undefined ? { policyVersionId: input.policyVersionId } : {}),
+    requestId: ctx.requestId,
+    summary: {
+      public_access_id: access.id,
+      listing_id: access.listingId,
+      version_number: closed.versionNumber,
+      surface_enabled: false,
+      cause: input.terminal === 'REVOKED' ? 'listing_closed' : 'listing_expired',
+    },
+  });
   return { access, closed };
 }
 

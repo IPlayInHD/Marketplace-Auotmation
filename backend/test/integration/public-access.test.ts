@@ -154,6 +154,7 @@ describe('Public access domain', () => {
         to: 'LISTED',
         row_version: result.listing.rowVersion,
         public_access_id: result.access.id,
+        content_version_id: built.versionId,
       },
     ]);
     expect(status[1]).toMatchObject({

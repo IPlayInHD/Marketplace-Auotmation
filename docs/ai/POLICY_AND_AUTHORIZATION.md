@@ -235,7 +235,8 @@ overrides learned preference.
 `LISTING_CREATED` · `LISTING_CONTENT_ENHANCED` · `LISTING_CONTENT_APPROVED` ·
 `LISTING_ASKING_PRICE_CHANGED` · `LISTING_STATUS_CHANGED` ·
 `SELLER_POLICY_CHANGED` · `MINIMUM_PRICE_CHANGED` · `ACCESS_CODE_CREATED` ·
-`ACCESS_CODE_ROTATED` · `ACCESS_CODE_REVOKED` · `BUYER_SESSION_CREATED` ·
+`ACCESS_CODE_ROTATED` · `ACCESS_CODE_REVOKED` · `ACCESS_CODE_EXPIRED` ·
+`BUYER_SESSION_CREATED` ·
 `OFFER_CREATED` · `OFFER_CHANGED` · `COUNTEROFFER_SENT` · `SELLER_ACTION_REQUIRED` ·
 `SELLER_APPROVED` · `SELLER_DECLINED` · `SELLER_COUNTERED` · `APPROVAL_INVALIDATED` ·
 `BUYER_ACCEPTANCE_COMMUNICATED` · `DEAL_PENDING` · `DEAL_CANCELLED` · `LISTING_SOLD` ·
@@ -254,3 +255,10 @@ in the same transaction as the change they record (`OPS-780`, `OPS-781`, `OPS-78
 (`AUTH-INV-08`, `OPS-569`). Both were added on 2026-09-03 to complete `OPS-781` for the
 listing lifecycle and the asking price, which are consequential actions this list did not
 name; this is completion of an existing requirement, not a new decision.
+
+`ACCESS_CODE_EXPIRED` records every successful transition of an `ACTIVE` access code to
+`EXPIRED` (`architecture/STATE_MACHINES.md` §2), with the access, the listing, the code's
+version and the cause, written in the same transaction as the closure it belongs to
+(`OPS-787`). It carries no code, no hash and no protected value. Added on 2026-09-04 to
+complete `OPS-780` and `OPS-781` for a consequential change this list did not name; this is
+completion of an existing requirement, not a new decision.

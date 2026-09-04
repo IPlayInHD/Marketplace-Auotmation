@@ -56,4 +56,6 @@ export const SQLSTATE = {
   publicAccessOnClosedListing: 'PA003',
   /** An ACTIVE code without an enabled access on an open listing (SM-L-02). */
   accessCodeOnClosedAccess: 'AC003',
+  /** LISTED entered without an APPROVED current version, or a relist without a new one (SM-L-06). */
+  listingRelistContentRequired: 'LS007',
 } as const;

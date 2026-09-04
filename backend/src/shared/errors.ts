@@ -79,6 +79,16 @@ export class PublicAccessRequiredError extends DomainError {
   }
 }
 
+/** SM-L-06: relisting needs a new seller-approved content version, created and approved after the previous publication. */
+export class RelistContentRequiredError extends DomainError {
+  readonly code = 'RELIST_CONTENT_REQUIRED';
+  constructor() {
+    super(
+      'relisting requires a new seller-approved content version created after the previous publication (SM-L-06)',
+    );
+  }
+}
+
 /** OPS-732: an idempotency key reused for a different command or with a different payload. */
 export class IdempotencyConflictError extends DomainError {
   readonly code = 'IDEMPOTENCY_CONFLICT';
@@ -142,6 +152,8 @@ export function mapDatabaseError(err: unknown, subjectType: string): unknown {
     case SQLSTATE.publicAccessOnClosedListing:
     case SQLSTATE.accessCodeOnClosedAccess:
       return new InvalidStateError(subjectType, 'closed', 'hold an open surface (SM-L-02)');
+    case SQLSTATE.listingRelistContentRequired:
+      return new RelistContentRequiredError();
     case SQLSTATE.listingRowVersionMismatch:
     case SQLSTATE.publicAccessRowVersionMismatch:
       return new ConcurrentModificationError(subjectType);

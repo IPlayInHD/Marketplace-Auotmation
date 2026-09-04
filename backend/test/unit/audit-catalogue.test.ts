@@ -46,6 +46,7 @@ describe('Audit event catalogue', () => {
     const names = await catalogueEvents();
     expect(names).toContain('LISTING_STATUS_CHANGED');
     expect(names).toContain('LISTING_ASKING_PRICE_CHANGED');
+    expect(names).toContain('ACCESS_CODE_EXPIRED');
   });
 
   it('is identical in the canonical document, the TypeScript list and the migrations', async () => {
