@@ -1,74 +1,87 @@
-import { Writable } from 'node:stream';
+import Fastify from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createDb, type DbHandle } from '../../src/db/kysely.ts';
-import { createLogger } from '../../src/observability/logger.ts';
-import { buildWebApp, ROUTE_PREFIXES, type WebApp } from '../../src/web/app.ts';
+import { ROUTE_PREFIXES } from '../../src/web/app.ts';
+import { declaredRoutes, enforceRouteDeclarations } from '../../src/web/authorization.ts';
+import { AUTH_PREFIX, startAuthApp, type AuthApp } from '../helpers/auth.ts';
 import { startDatabase, type TestDatabase } from '../helpers/database.ts';
 
-// The web skeleton: health over the runtime role, request correlation, and no seller or buyer
-// route in this slice (D-18 boundaries, AUTH-222 deny by default).
+// The web process: health over the runtime role, request correlation, the D-19 seller
+// authentication routes and nothing else (D-18 boundaries, AUTH-222 deny by default).
 
 describe('Web process', () => {
   let env: TestDatabase;
-  let runtime: DbHandle;
-  let app: WebApp;
-  const lines: string[] = [];
+  let harness: AuthApp;
 
   beforeAll(async () => {
     env = await startDatabase();
-    runtime = createDb(env.runtimeUrl, { max: 2, applicationName: 'web-test' });
-    const stream = new Writable({
-      write(chunk: Buffer, _encoding, callback) {
-        lines.push(chunk.toString());
-        callback();
-      },
-    });
-    app = await buildWebApp({
-      db: runtime.db,
-      logger: createLogger({ module: 'web', env: 'ci', release: 'test', stream }),
-    });
-    await app.ready();
+    harness = await startAuthApp(env);
   });
   afterAll(async () => {
-    await app?.close();
-    await runtime?.close();
+    await harness?.close();
     await env?.stop();
   });
 
   it('answers /health through the runtime role and exposes the request id', async () => {
-    const res = await app.inject({ method: 'GET', url: '/health' });
+    const res = await harness.app.inject({ method: 'GET', url: '/health' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ status: 'ok', database: 'reachable' });
     expect(res.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
   });
 
-  it('registers no seller route and no buyer route', async () => {
-    expect(app.hasRoute({ method: 'GET', url: '/health' })).toBe(true);
+  it('registers exactly the six declared seller-authentication routes and no buyer route', async () => {
+    expect(declaredRoutes(harness.app)).toEqual([
+      { method: 'POST', url: `${AUTH_PREFIX}/sign-in`, authorization: 'unauthenticated-sign-in' },
+      { method: 'GET', url: `${AUTH_PREFIX}/me`, authorization: 'seller-session' },
+      { method: 'GET', url: `${AUTH_PREFIX}/sessions`, authorization: 'seller-session' },
+      { method: 'POST', url: `${AUTH_PREFIX}/sessions/rotate`, authorization: 'seller-session' },
+      { method: 'POST', url: `${AUTH_PREFIX}/sign-out`, authorization: 'seller-session' },
+      { method: 'POST', url: `${AUTH_PREFIX}/sign-out-all`, authorization: 'seller-session' },
+    ]);
     for (const url of [
       `${ROUTE_PREFIXES.buyer}/:publicId`,
       `${ROUTE_PREFIXES.buyer}`,
       `${ROUTE_PREFIXES.seller}/listings`,
       `${ROUTE_PREFIXES.seller}`,
+      `${AUTH_PREFIX}/sign-up`,
+      `${AUTH_PREFIX}/reset`,
       '/signup',
       '/login',
     ]) {
-      expect(app.hasRoute({ method: 'GET', url }), url).toBe(false);
-      expect(app.hasRoute({ method: 'POST', url }), url).toBe(false);
+      expect(harness.app.hasRoute({ method: 'GET', url }), url).toBe(false);
+      expect(harness.app.hasRoute({ method: 'POST', url }), url).toBe(false);
     }
     for (const url of [
       `${ROUTE_PREFIXES.buyer}/abcdefghijklmnop`,
       `${ROUTE_PREFIXES.seller}/listings`,
       '/signup',
     ]) {
-      const res = await app.inject({ method: 'GET', url });
+      const res = await harness.app.inject({ method: 'GET', url });
       expect(res.statusCode, url).toBe(404);
+      expect(res.json()).toEqual({ error: 'not_found' });
     }
   });
 
-  it('logs with fixed fields and never a connection string', () => {
-    const out = lines.join('');
+  it('fails to build when a seller route lacks an authorization declaration (AUTH-222)', async () => {
+    const app = Fastify();
+    enforceRouteDeclarations(app, ROUTE_PREFIXES.seller);
+    await expect(
+      app.register((scope, _opts, done) => {
+        try {
+          scope.get(`${ROUTE_PREFIXES.seller}/listings`, () => ({}));
+          done();
+        } catch (err) {
+          done(err as Error);
+        }
+      }),
+    ).rejects.toThrow(/AUTH-222/);
+    await app.close();
+  });
+
+  it('logs with fixed fields and never a connection string, an address or a token', () => {
+    const out = harness.logText();
     expect(out).toContain('"module":"web"');
     expect(out).not.toContain(env.runtimeUrl);
     expect(out).not.toMatch(/postgresql:\/\/[^@]*:[^@]*@/);
+    expect(out).not.toMatch(/"remoteAddress":"(?!\[REDACTED\])/);
   });
 });

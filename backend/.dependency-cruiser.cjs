@@ -19,8 +19,8 @@ module.exports = {
     {
       name: 'outside-code-uses-module-index',
       severity: 'error',
-      comment: 'Web, db, shared, observability and tests reach a module only through its index.ts.',
-      from: { path: '^(src/(web|db|shared|observability)/|test/)' },
+      comment: 'Web, cli, db, shared, observability and tests reach a module only through its index.ts.',
+      from: { path: '^(src/(web|db|shared|observability|cli)/|test/)' },
       to: { path: '^src/modules/[^/]+/', pathNot: '^src/modules/[^/]+/index\\.ts$' },
     },
     {

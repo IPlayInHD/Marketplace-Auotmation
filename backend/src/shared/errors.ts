@@ -89,6 +89,40 @@ export class RelistContentRequiredError extends DomainError {
   }
 }
 
+/** AUTH-205, AUTH-219: no live seller session was presented. One generic failure for every cause. */
+export class UnauthenticatedError extends DomainError {
+  readonly code = 'UNAUTHENTICATED';
+  constructor() {
+    super('no valid seller session');
+  }
+}
+
+/** SEC-311: a state-changing request without acceptable origin evidence. */
+export class OriginRefusedError extends DomainError {
+  readonly code = 'ORIGIN_REFUSED';
+  constructor() {
+    super('request origin refused');
+  }
+}
+
+/** SEC-310: a state-changing request without the session's anti-forgery value. */
+export class AntiForgeryRefusedError extends DomainError {
+  readonly code = 'ANTI_FORGERY_REFUSED';
+  constructor() {
+    super('anti-forgery check failed');
+  }
+}
+
+/** D-19 trusted-proxy policy: the client could not be identified from the peer and its forwarding headers. */
+export class ClientIdentityError extends DomainError {
+  readonly code = 'CLIENT_IDENTITY';
+  readonly reason: string;
+  constructor(reason: string) {
+    super('client identity could not be established');
+    this.reason = reason;
+  }
+}
+
 /** OPS-732: an idempotency key reused for a different command or with a different payload. */
 export class IdempotencyConflictError extends DomainError {
   readonly code = 'IDEMPOTENCY_CONFLICT';
@@ -154,6 +188,12 @@ export function mapDatabaseError(err: unknown, subjectType: string): unknown {
       return new InvalidStateError(subjectType, 'closed', 'hold an open surface (SM-L-02)');
     case SQLSTATE.listingRelistContentRequired:
       return new RelistContentRequiredError();
+    case SQLSTATE.sellerAccountImmutable:
+    case SQLSTATE.sellerSessionImmutable:
+    case SQLSTATE.sellerSessionRevocationFinal:
+      return new InvalidStateError(subjectType, 'immutable', 'be changed or deleted');
+    case SQLSTATE.sellerSessionNotLive:
+      return new UnauthenticatedError();
     case SQLSTATE.listingRowVersionMismatch:
     case SQLSTATE.publicAccessRowVersionMismatch:
       return new ConcurrentModificationError(subjectType);

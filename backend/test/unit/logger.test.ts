@@ -110,4 +110,57 @@ describe('Structured logging', () => {
     expect(withRequest.length).toBeGreaterThanOrEqual(3);
     for (const r of withRequest) expect(r['request_id']).toBe('req-fixed-1');
   });
+
+  it('redacts session tokens, token hashes, anti-forgery values, addresses, cookies and forwarding headers (D-19, OPS-567, OPS-568)', () => {
+    const { stream, lines } = capture();
+    const log = createLogger({ module: 'web', env: 'ci', release: 'test', stream });
+    log.info(
+      {
+        token: 'tok-secret-3',
+        tokenHash: 'hash-secret-4',
+        antiForgery: 'af-secret-5',
+        email: ['someone', 'synthetic.invalid'].join('@'),
+        ip: '203.0.113.77',
+        req: {
+          remoteAddress: '203.0.113.78',
+          headers: { cookie: 'c=6', 'x-forwarded-for': '203.0.113.79', forwarded: 'for=203.0.113.80' },
+        },
+        res: { headers: { 'set-cookie': '__Host-seller_session=tok-secret-7' } },
+        nested: {
+          deeper: {
+            session_token: 'tok-secret-8',
+            token_hash: 'hash-secret-9',
+            x: { anti_forgery: 'af-secret-10' },
+          },
+        },
+        safe_field: 'visible',
+      },
+      'accidental record',
+    );
+    const out = lines.join('');
+    for (const secret of [
+      'tok-secret',
+      'hash-secret',
+      'af-secret',
+      'synthetic.invalid',
+      '203.0.113',
+      'c=6',
+    ]) {
+      expect(out, secret).not.toContain(secret);
+    }
+    expect(out).toContain('"safe_field":"visible"');
+    for (const key of [
+      'token',
+      'tokenHash',
+      'antiForgery',
+      'email',
+      'ip',
+      'remoteAddress',
+      'x-forwarded-for',
+      'forwarded',
+      'set-cookie',
+    ]) {
+      expect(FORBIDDEN_LOG_KEYS).toContain(key);
+    }
+  });
 });

@@ -29,6 +29,7 @@ describe('Migrations', () => {
       '0004_public_access.sql',
       '0005_listed_lifecycle.sql',
       '0006_relist_content_and_code_expiry.sql',
+      '0007_seller_authentication.sql',
     ]);
     expect(first.alreadyApplied).toEqual([]);
 
@@ -48,6 +49,7 @@ describe('Migrations', () => {
       '0004_public_access.sql',
       '0005_listed_lifecycle.sql',
       '0006_relist_content_and_code_expiry.sql',
+      '0007_seller_authentication.sql',
     ]);
   });
 
@@ -160,6 +162,76 @@ describe('Migrations', () => {
       `SELECT unnest(enum_range(NULL::${APP_SCHEMA}.audit_event_type))::text AS value`,
     );
     expect(rows.map((r) => r.value).sort()).toEqual([...AUDIT_EVENT_TYPES].sort());
+  });
+
+  it('give the auth schema to the migration role and the runtime role keyhole functions only (D-19, OPS-716)', async () => {
+    const tables = await query<{ relname: string; owner: string; rls: boolean }>(
+      env.superuserUrl,
+      `SELECT c.relname, pg_get_userbyid(c.relowner) AS owner, c.relrowsecurity AS rls
+         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'auth' AND c.relkind = 'r' ORDER BY 1`,
+    );
+    expect(tables.map((t) => t.relname)).toEqual([
+      'seller_account',
+      'seller_session',
+      'sign_in_event',
+      'sign_in_throttle',
+    ]);
+    for (const t of tables) {
+      expect(t.owner, t.relname).toBe(ROLES.migrator);
+      for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) {
+        const [row] = await query<{ allowed: boolean }>(
+          env.superuserUrl,
+          `SELECT has_table_privilege($1, $2, $3) AS allowed`,
+          [ROLES.runtime, `auth.${t.relname}`, privilege],
+        );
+        expect(row?.allowed, `${t.relname} ${privilege}`).toBe(false);
+      }
+    }
+    const [schema] = await query<{ usage: boolean; create: boolean }>(
+      env.superuserUrl,
+      `SELECT has_schema_privilege($1, 'auth', 'USAGE') AS usage, has_schema_privilege($1, 'auth', 'CREATE') AS create`,
+      [ROLES.runtime],
+    );
+    expect(schema).toEqual({ usage: true, create: false });
+    const functions = await query<{
+      name: string;
+      secdef: boolean;
+      config: string[] | null;
+      executable: boolean;
+    }>(
+      env.superuserUrl,
+      `SELECT p.proname AS name, p.prosecdef AS secdef, p.proconfig AS config,
+              has_function_privilege($1, p.oid, 'EXECUTE') AS executable
+         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'auth' AND p.prokind = 'f' ORDER BY 1`,
+      [ROLES.runtime],
+    );
+    const keyholes = functions.filter((f) => !f.name.endsWith('_guard'));
+    expect(keyholes.map((f) => f.name)).toEqual([
+      'create_session',
+      'list_account_sessions',
+      'record_sign_in_event',
+      'record_sign_in_success',
+      'reserve_sign_in_attempt',
+      'resolve_session',
+      'revoke_account_sessions',
+      'revoke_session',
+      'rotate_session',
+      'sign_in_lookup',
+    ]);
+    for (const f of keyholes) {
+      expect(f.secdef, `${f.name} SECURITY DEFINER`).toBe(true);
+      expect(f.config?.join(' '), `${f.name} search_path`).toContain('search_path=pg_catalog, auth, app');
+      expect(f.executable, `${f.name} EXECUTE`).toBe(true);
+    }
+    for (const f of functions.filter((f) => f.name.endsWith('_guard')))
+      expect(f.executable, f.name).toBe(false);
+    const [publicExec] = await query<{ allowed: boolean }>(
+      env.superuserUrl,
+      `SELECT has_function_privilege('public', 'auth.sign_in_lookup(text)', 'EXECUTE') AS allowed`,
+    );
+    expect(publicExec?.allowed).toBe(false);
   });
 
   it('keep the migration ledger out of the runtime role’s reach', async () => {

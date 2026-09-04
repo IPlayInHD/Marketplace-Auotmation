@@ -22,6 +22,21 @@ export const FORBIDDEN_LOG_KEYS = [
   'sessionToken',
   'session_token',
   'token',
+  'tokenHash',
+  'token_hash',
+  'antiForgery',
+  'anti_forgery',
+  'x-anti-forgery',
+  'set-cookie',
+  'email',
+  'emailNormalized',
+  'email_normalized',
+  'ip',
+  'remoteAddress',
+  'remote_address',
+  'x-forwarded-for',
+  'forwarded',
+  'x-real-ip',
   'secret',
   'apiKey',
   'api_key',
@@ -44,7 +59,9 @@ export const FORBIDDEN_LOG_KEYS = [
 function redactPaths(): string[] {
   const paths: string[] = [];
   for (const key of FORBIDDEN_LOG_KEYS) {
-    paths.push(key, `*.${key}`, `*.*.${key}`, `*.*.*.${key}`);
+    // pino path syntax: a key with a hyphen must be bracketed.
+    const safe = key.includes('-') ? `["${key}"]` : key;
+    paths.push(safe, `*.${safe}`, `*.*.${safe}`, `*.*.*.${safe}`);
   }
   return paths;
 }

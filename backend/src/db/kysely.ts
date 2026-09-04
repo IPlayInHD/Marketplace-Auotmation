@@ -61,9 +61,19 @@ export async function withTenant<T>(
   sellerId: string,
   fn: (trx: TenantTransaction) => Promise<T>,
 ): Promise<T> {
-  const validSellerId = SellerId.parse(sellerId);
   return db.transaction().execute(async (trx) => {
-    await sql`select set_config(${TENANT_SETTING}, ${validSellerId}, true)`.execute(trx);
+    await establishTenantContext(trx, sellerId);
     return fn(trx);
   });
+}
+
+/**
+ * The one statement that creates tenant context, shared by `withTenant` (a principal already
+ * known to the caller) and by the Identity & Auth module's `withSellerSession`, which calls it
+ * only after a live session has proven the seller inside the same transaction (D-19 condition 3).
+ * Never call it with an identifier taken from a request.
+ */
+export async function establishTenantContext(trx: TenantTransaction, sellerId: string): Promise<void> {
+  const validSellerId = SellerId.parse(sellerId);
+  await sql`select set_config(${TENANT_SETTING}, ${validSellerId}, true)`.execute(trx);
 }

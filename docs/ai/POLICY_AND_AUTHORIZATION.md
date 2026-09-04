@@ -236,6 +236,8 @@ overrides learned preference.
 `LISTING_ASKING_PRICE_CHANGED` · `LISTING_STATUS_CHANGED` ·
 `SELLER_POLICY_CHANGED` · `MINIMUM_PRICE_CHANGED` · `ACCESS_CODE_CREATED` ·
 `ACCESS_CODE_ROTATED` · `ACCESS_CODE_REVOKED` · `ACCESS_CODE_EXPIRED` ·
+`SELLER_SIGN_IN_SUCCEEDED` · `SELLER_SIGN_IN_FAILED` · `SELLER_SIGN_IN_THROTTLED` ·
+`SELLER_SESSION_ROTATED` · `SELLER_SIGNED_OUT` · `SELLER_SESSIONS_REVOKED` ·
 `BUYER_SESSION_CREATED` ·
 `OFFER_CREATED` · `OFFER_CHANGED` · `COUNTEROFFER_SENT` · `SELLER_ACTION_REQUIRED` ·
 `SELLER_APPROVED` · `SELLER_DECLINED` · `SELLER_COUNTERED` · `APPROVAL_INVALIDATED` ·
@@ -262,3 +264,16 @@ version and the cause, written in the same transaction as the closure it belongs
 (`OPS-787`). It carries no code, no hash and no protected value. Added on 2026-09-04 to
 complete `OPS-780` and `OPS-781` for a consequential change this list did not name; this is
 completion of an existing requirement, not a new decision.
+
+The six seller-authentication events record `AUTH-217` and `AUTH-206` under
+`decisions/DECISION_LOG.md` D-19 (Accepted 2026-09-04). `SELLER_SIGN_IN_SUCCEEDED` (a session
+issued), `SELLER_SESSION_ROTATED` (a new identifier replacing a live one), `SELLER_SIGNED_OUT`
+(one session revoked by its holder) and `SELLER_SESSIONS_REVOKED` (every session of an account
+revoked) are written to the seller's audit trail in the same transaction as the change, with
+the account, the session identifiers and the hashed client identifier only. `SELLER_SIGN_IN_FAILED`
+and `SELLER_SIGN_IN_THROTTLED` happen before any seller is known, so they are written to the
+authentication ledger `auth.sign_in_event` under the same event type, keyed by the hashed
+account identifier and the hashed client identifier, in the transaction that records the
+failure or the refusal; a failed sign-in against an unknown address and one against a known
+address are recorded identically. No event carries a password, a verifier, a token, a token
+hash, an anti-forgery value, an address or a raw client identifier (`OPS-783`, `SEC-043`).

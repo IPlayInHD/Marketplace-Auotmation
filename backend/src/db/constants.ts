@@ -58,4 +58,14 @@ export const SQLSTATE = {
   accessCodeOnClosedAccess: 'AC003',
   /** LISTED entered without an APPROVED current version, or a relist without a new one (SM-L-06). */
   listingRelistContentRequired: 'LS007',
+  /** Seller account identity changed or a delete attempted (D-19). */
+  sellerAccountImmutable: 'SA001',
+  /** Session identity changed or a delete attempted (D-19 condition 3). */
+  sellerSessionImmutable: 'SS001',
+  /** A revoked session was modified: revocation is final (AUTH-219). */
+  sellerSessionRevocationFinal: 'SS002',
+  /** Rotation of a session that is not live (AUTH-206). */
+  sellerSessionNotLive: 'SS003',
+  /** An invalid throttle policy was passed to the keyhole (AUTH-204). */
+  signInThrottlePolicyInvalid: 'ST001',
 } as const;

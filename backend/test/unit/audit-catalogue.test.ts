@@ -47,6 +47,16 @@ describe('Audit event catalogue', () => {
     expect(names).toContain('LISTING_STATUS_CHANGED');
     expect(names).toContain('LISTING_ASKING_PRICE_CHANGED');
     expect(names).toContain('ACCESS_CODE_EXPIRED');
+    for (const name of [
+      'SELLER_SIGN_IN_SUCCEEDED',
+      'SELLER_SIGN_IN_FAILED',
+      'SELLER_SIGN_IN_THROTTLED',
+      'SELLER_SESSION_ROTATED',
+      'SELLER_SIGNED_OUT',
+      'SELLER_SESSIONS_REVOKED',
+    ]) {
+      expect(names, name).toContain(name);
+    }
   });
 
   it('is identical in the canonical document, the TypeScript list and the migrations', async () => {
