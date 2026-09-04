@@ -6,17 +6,20 @@ import type { ColumnType, Generated, JSONColumnType } from 'kysely';
 // bigint money columns arrive as JavaScript numbers through the safe-integer parser installed in
 // src/db/kysely.ts; `date` columns arrive as ISO strings.
 
-export type ListingStatus =
-  | 'DRAFT'
-  | 'READY'
-  | 'LISTED'
-  | 'ACTIVE_CONVERSATIONS'
-  | 'OFFER_PENDING'
-  | 'PENDING_SALE'
-  | 'SOLD'
-  | 'CANCELLED'
-  | 'ARCHIVED'
-  | 'EXPIRED';
+/** The listing lifecycle states of architecture/STATE_MACHINES.md §1, as the database enum names them. */
+export const LISTING_STATUSES = [
+  'DRAFT',
+  'READY',
+  'LISTED',
+  'ACTIVE_CONVERSATIONS',
+  'OFFER_PENDING',
+  'PENDING_SALE',
+  'SOLD',
+  'CANCELLED',
+  'ARCHIVED',
+  'EXPIRED',
+] as const;
+export type ListingStatus = (typeof LISTING_STATUSES)[number];
 
 export type ContentProvenance = 'SELLER_PROVIDED_FACT' | 'AI_ENHANCED_COPY' | 'SELLER_APPROVED_COPY';
 
@@ -164,6 +167,24 @@ export interface AuditEventTable {
   created_at: Generated<Date>;
 }
 
+/**
+ * The idempotency store (OPS-730 to OPS-733, migration 0003): one receipt per key per seller with
+ * the command's fingerprint and the outcome returned to the caller. `audit_event_id` is null when
+ * the command was a valid no-op that changed nothing.
+ */
+export interface IdempotencyReceiptTable {
+  seller_id: string;
+  idempotency_key: string;
+  command: string;
+  fingerprint: string;
+  subject_type: string;
+  subject_id: string;
+  outcome: JSONColumnType<Record<string, unknown>>;
+  audit_event_id: string | null;
+  request_id: string;
+  created_at: Generated<Date>;
+}
+
 export interface Database {
   seller: SellerTable;
   inventory_item: InventoryItemTable;
@@ -172,4 +193,5 @@ export interface Database {
   product_fact: ProductFactTable;
   seller_policy_version: SellerPolicyVersionTable;
   audit_event: AuditEventTable;
+  idempotency_receipt: IdempotencyReceiptTable;
 }

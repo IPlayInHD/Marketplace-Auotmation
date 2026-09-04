@@ -71,11 +71,11 @@ export class ConcurrentModificationError extends DomainError {
   }
 }
 
-/** OPS-732: an idempotency key reused for a different action or subject. */
+/** OPS-732: an idempotency key reused for a different command or with a different payload. */
 export class IdempotencyConflictError extends DomainError {
   readonly code = 'IDEMPOTENCY_CONFLICT';
   constructor() {
-    super('idempotency key was already used for a different action');
+    super('idempotency key was already used for a different command or payload');
   }
 }
 

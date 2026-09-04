@@ -12,20 +12,20 @@ image later, two entry points (`web` here; `worker` is not yet part of any slice
 
 The listing-domain foundation and the DRAFT → READY transition:
 
-| Concern                                                                                                                            | Where                                                              | Canonical anchor                               |
-| ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------- |
-| Forward-only SQL migrations, ledger with checksums, advisory-locked runner                                                         | `src/db/migrate.ts`, `src/db/migrations/`                          | `OPS-513`, `OPS-514`, `OPS-714`                |
-| Roles: `app_migrator` owns everything; `app_runtime` is DML-only, no DDL, no `BYPASSRLS`                                           | `src/db/migrate.ts` (bootstrap), migration grants                  | `OPS-716`, D-17                                |
-| Row-level security on every seller-owned table, forced for the owner, fail-closed without context                                  | migration `0001`                                                   | `SEC-100`, `SEC-101`                           |
-| Single tenant-context construction site, transaction-scoped                                                                        | `src/db/kysely.ts` `withTenant()`                                  | `SEC-101`                                      |
-| Entities: `seller`, `inventory_item`, `listing`, `listing_content_version`, `product_fact`, `seller_policy_version`, `audit_event` | migration `0001`, `src/db/schema.ts`                               | `DOMAIN_MODEL.md`, `DM-01`, `DM-06`, `DM-07`   |
-| Listing lifecycle guard: only the drawn transitions, SM-L-01 prerequisites named, `row_version` increment                          | migration `0001` triggers, `src/modules/listings/`                 | `STATE_MACHINES.md` §1, `OPS-707`, `OPS-738`   |
-| Content version guard: words immutable, only §8 transitions, one APPROVED per listing                                              | migration `0001` triggers                                          | `STATE_MACHINES.md` §8, `SM-CT-01`, `OPS-706`  |
-| Seller-provided facts as the only provenance; approved copy details must be backed by facts                                        | `product_fact` constraint, READY guard                             | D-10, `INV-12`                                 |
-| Minimum price on the policy version only, protected; buyer-safe projection cannot hold it                                          | `src/modules/seller-policy/`, `src/modules/public-listing-access/` | D-04, `SEC-021`, `OPS-724`                     |
-| Append-only audit events with request id, actor, subject, policy version; idempotency keys                                         | `src/modules/audit/`                                               | `OPS-780` to `OPS-784`, `OPS-730` to `OPS-732` |
-| Module boundaries enforced in the build                                                                                            | `.dependency-cruiser.cjs`                                          | `ARCH` §3, `OPS-702`                           |
-| Fastify `web` skeleton: `/health`, empty seller and buyer route trees, loopback bind                                               | `src/web/`                                                         | `ARCH-002`, `AUTH-222`, D-18                   |
+| Concern                                                                                                                                                   | Where                                                              | Canonical anchor                               |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------- |
+| Forward-only SQL migrations, ledger with checksums, advisory-locked runner                                                                                | `src/db/migrate.ts`, `src/db/migrations/`                          | `OPS-513`, `OPS-514`, `OPS-714`                |
+| Roles: `app_migrator` owns everything; `app_runtime` is DML-only, no DDL, no `BYPASSRLS`                                                                  | `src/db/migrate.ts` (bootstrap), migration grants                  | `OPS-716`, D-17                                |
+| Row-level security on every seller-owned table, forced for the owner, fail-closed without context                                                         | migration `0001`                                                   | `SEC-100`, `SEC-101`                           |
+| Single tenant-context construction site, transaction-scoped                                                                                               | `src/db/kysely.ts` `withTenant()`                                  | `SEC-101`                                      |
+| Entities: `seller`, `inventory_item`, `listing`, `listing_content_version`, `product_fact`, `seller_policy_version`, `audit_event`, `idempotency_receipt` | migrations `0001`, `0003`, `src/db/schema.ts`                      | `DOMAIN_MODEL.md`, `DM-01`, `DM-06`, `DM-07`   |
+| Listing lifecycle guard: only the drawn transitions, SM-L-01 prerequisites named, `row_version` increment                                                 | migration `0001` triggers, `src/modules/listings/`                 | `STATE_MACHINES.md` §1, `OPS-707`, `OPS-738`   |
+| Content version guard: words immutable, only §8 transitions, one APPROVED per listing                                                                     | migration `0001` triggers                                          | `STATE_MACHINES.md` §8, `SM-CT-01`, `OPS-706`  |
+| Seller-provided facts as the only provenance; approved copy details must be backed by facts                                                               | `product_fact` constraint, READY guard                             | D-10, `INV-12`                                 |
+| Minimum price on the policy version only, protected; buyer-safe projection cannot hold it                                                                 | `src/modules/seller-policy/`, `src/modules/public-listing-access/` | D-04, `SEC-021`, `OPS-724`                     |
+| Append-only audit events with request id, actor, subject, policy version; idempotency receipts with command fingerprint and stored outcome                | `src/modules/audit/`                                               | `OPS-780` to `OPS-784`, `OPS-730` to `OPS-733` |
+| Module boundaries enforced in the build                                                                                                                   | `.dependency-cruiser.cjs`                                          | `ARCH` §3, `OPS-702`                           |
+| Fastify `web` skeleton: `/health`, empty seller and buyer route trees, loopback bind                                                                      | `src/web/`                                                         | `ARCH-002`, `AUTH-222`, D-18                   |
 
 Not here, by design: authentication (Q-12 stays open), sign-up, any frontend, images,
 enhancement, AI, buyer sessions, conversations, offers, notifications, analytics, pg-boss jobs,
@@ -100,10 +100,10 @@ store (`OPS-729`).
 Two roles, created once by a superuser (`bootstrapRoles`), which is never used afterwards except
 by tests for privileged inspection.
 
-| Role           | Attributes                                                                                  | Owns                                                    | May                                                                                                                                                                                     |
-| -------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app_migrator` | `LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT`, `CREATE` on the database | schema `app`, schema `migration` and everything in both | run migrations                                                                                                                                                                          |
-| `app_runtime`  | same, without `CREATE`                                                                      | nothing                                                 | `seller`, `inventory_item`, `listing`, `listing_content_version`, `product_fact`: SELECT INSERT UPDATE · `seller_policy_version`, `audit_event`: SELECT INSERT · nothing on `migration` |
+| Role           | Attributes                                                                                  | Owns                                                    | May                                                                                                                                                                                                            |
+| -------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app_migrator` | `LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT`, `CREATE` on the database | schema `app`, schema `migration` and everything in both | run migrations                                                                                                                                                                                                 |
+| `app_runtime`  | same, without `CREATE`                                                                      | nothing                                                 | `seller`, `inventory_item`, `listing`, `listing_content_version`, `product_fact`: SELECT INSERT UPDATE · `seller_policy_version`, `audit_event`, `idempotency_receipt`: SELECT INSERT · nothing on `migration` |
 
 Tenant context is `set_config('app.seller_id', <uuid>, true)` inside a transaction, established
 only by `withTenant()`. `app.current_seller_id()` returns `NULLIF(current_setting(..., true),
@@ -123,8 +123,9 @@ only by `withTenant()`. `app.current_seller_id()` returns `NULLIF(current_settin
 - **Facts.** `product_fact` accepts only `SELLER_PROVIDED_FACT` provenance (D-10). A listing
   cannot reach READY while its approved copy carries a structured detail that no seller fact
   backs (INV-12); `createSellerDraft` refuses such a draft earlier.
-- **Policy versions** and **audit events** are append-only at two layers: the runtime role holds
-  no UPDATE or DELETE privilege, and a trigger rejects them for the owner as well.
+- **Policy versions**, **audit events** and **idempotency receipts** are append-only at two
+  layers: the runtime role holds no UPDATE or DELETE privilege, and a trigger rejects them for
+  the owner as well.
 - **Listing status** changes only along STATE_MACHINES §1 edges, enforced by a trigger; READY
   additionally requires the SM-L-01 prerequisites, and the refusal names what is missing
   (`SQLSTATE LS002`, DETAIL). `row_version` must advance by exactly one on every update.
@@ -132,8 +133,18 @@ only by `withTenant()`. `app.current_seller_id()` returns `NULLIF(current_settin
   2026-09-03 names `LISTING_STATUS_CHANGED` (every lifecycle transition, previous and new status)
   and `LISTING_ASKING_PRICE_CHANGED` (every asking-price or currency change, previous and new
   values, never the minimum). A unit test and an integration test keep the document, the
-  TypeScript list and the database enum identical (`OPS-781`). Submitting the asking price a
-  listing already carries is an idempotent no-op: no write, no event.
+  TypeScript list and the database enum identical (`OPS-781`).
+- **Idempotency** (`OPS-730` to `OPS-733`). Every command writes a receipt under its key in the
+  same transaction as its effect: the command name, a SHA-256 fingerprint of the payload (never
+  the payload, which for a policy holds the minimum price) and the outcome returned to the
+  caller, which the forbidden-key guard checks like an audit payload. The receipt is read before
+  any current-state check, so a retry with the same key and payload returns the original
+  outcome even after the price, the status or `row_version` has moved on, and never re-runs the
+  mutation; the same key with a different command or payload is a conflict. Submitting the
+  asking price a DRAFT listing already carries is a successful no-op: no write, no `row_version`
+  change and no change event, but the receipt is written and the key consumed, so its retry is
+  stable too. Receipts are never deleted in this slice, which satisfies the retention floor of
+  `OPS-733`; a configured retry horizon and a retention job are not part of it.
 - Layouts that DOMAIN_MODEL.md leaves indicative (policy fields, fact keys) are fixed here as the
   LIST-002 and LIST-022 lists. If the founders read any of this as a deviation from the domain
   model, it is recorded in the decision log, per that document's own rule.

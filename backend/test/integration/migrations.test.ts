@@ -22,7 +22,11 @@ describe('Migrations', () => {
 
   it('apply cleanly to a fresh database, record the ledger, and are a no-op when re-run', async () => {
     const first = await runMigrations(env.migratorUrl);
-    expect(first.applied).toEqual(['0001_listing_foundation.sql', '0002_listing_asking_price_event.sql']);
+    expect(first.applied).toEqual([
+      '0001_listing_foundation.sql',
+      '0002_listing_asking_price_event.sql',
+      '0003_idempotency_receipt.sql',
+    ]);
     expect(first.alreadyApplied).toEqual([]);
 
     const ledger = await query<{ name: string; checksum: string }>(
@@ -37,6 +41,7 @@ describe('Migrations', () => {
     expect(second.alreadyApplied).toEqual([
       '0001_listing_foundation.sql',
       '0002_listing_asking_price_event.sql',
+      '0003_idempotency_receipt.sql',
     ]);
   });
 
@@ -84,6 +89,7 @@ describe('Migrations', () => {
     );
     expect(tables.map((t) => t.relname)).toEqual([
       'audit_event',
+      'idempotency_receipt',
       'inventory_item',
       'listing',
       'listing_content_version',

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { TenantTransaction } from '../../db/kysely.ts';
-import type { ListingStatus } from '../../db/schema.ts';
+import { LISTING_STATUSES, type ListingStatus } from '../../db/schema.ts';
 import type { CommandContext, WriteContext } from '../../shared/command.ts';
 import {
   ConcurrentModificationError,
@@ -69,6 +69,32 @@ function toListing(row: ListingRow): ListingRecord {
   };
 }
 
+/**
+ * A listing outcome as an idempotency receipt stores it and as a replay rebuilds it (OPS-731).
+ * The stored form is the record itself with its timestamps as ISO strings; it carries no
+ * protected value, and the receipt store's forbidden-key guard checks that on every write.
+ */
+const StoredListing = z.object({
+  id: z.uuid(),
+  sellerId: z.uuid(),
+  inventoryItemId: z.uuid(),
+  status: z.enum(LISTING_STATUSES),
+  askingPrice: MoneySchema.nullable(),
+  currentContentVersionId: z.uuid().nullable(),
+  currentPolicyVersionId: z.uuid().nullable(),
+  rowVersion: z.number().int(),
+  createdAt: z.coerce.date(),
+  updatedAt: z.coerce.date(),
+});
+
+function storeListing(listing: ListingRecord): Record<string, unknown> {
+  return { listing };
+}
+
+function reviveListing(stored: Record<string, unknown>): ListingRecord {
+  return StoredListing.parse(stored['listing']);
+}
+
 const IsoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 const CreateInventoryItemInput = z.strictObject({
@@ -124,6 +150,8 @@ export async function createListing(
   input: { inventoryItemId: string },
 ): Promise<ListingRecord> {
   const outcome = await audit.runIdempotent<ListingRecord>(trx, ctx, {
+    command: 'listing.create',
+    payload: input,
     eventType: 'LISTING_CREATED',
     subjectType: 'listing',
     run: async () => {
@@ -147,7 +175,8 @@ export async function createListing(
         throw mapDatabaseError(err, 'listing');
       }
     },
-    replay: (event) => getListing(trx, event.subjectId),
+    serialize: storeListing,
+    revive: reviveListing,
   });
   return outcome.value;
 }
@@ -203,8 +232,12 @@ function sameMoney(a: Money | null, b: Money): boolean {
  * consequential action, audited as LISTING_ASKING_PRICE_CHANGED under the seller's idempotency
  * key in the same transaction as the write (OPS-780, OPS-781, OPS-787). The previous and new
  * asking price are seller-published information (DATA_AND_PRIVACY §3.1, §8) and appear in the
- * payload; the minimum price never does. Submitting the price the listing already carries is an
- * idempotent no-op: nothing is written and no change event is recorded.
+ * payload; the minimum price never does.
+ *
+ * Submitting the price a DRAFT listing already carries is a successful no-op: no write, no
+ * row_version change, no change event. It still consumes the key and stores its outcome, so a
+ * retry returns that outcome whatever the listing looks like by then (OPS-731); the same key with
+ * another price, or for another command, is a conflict (OPS-732).
  */
 export async function setAskingPrice(
   trx: TenantTransaction,
@@ -212,17 +245,17 @@ export async function setAskingPrice(
   input: { listingId: string; price: Money; expectedRowVersion: number },
 ): Promise<ListingRecord> {
   const price = MoneySchema.parse(input.price);
-  const listing = await getListing(trx, input.listingId);
-  const stored = await audit.findAuditEventByIdempotencyKey(trx, ctx.sellerId, ctx.idempotencyKey);
-  if (stored === undefined) {
-    requireStatus(listing, 'DRAFT', 'change its asking price');
-    if (sameMoney(listing.askingPrice, price)) return listing;
-  }
   const outcome = await audit.runIdempotent<ListingRecord>(trx, ctx, {
+    command: 'listing.set_asking_price',
+    payload: { listingId: input.listingId, price, expectedRowVersion: input.expectedRowVersion },
     eventType: 'LISTING_ASKING_PRICE_CHANGED',
     subjectType: 'listing',
-    subjectId: listing.id,
     run: async () => {
+      const listing = await getListing(trx, input.listingId);
+      requireStatus(listing, 'DRAFT', 'change its asking price');
+      if (sameMoney(listing.askingPrice, price)) {
+        return { value: listing, subjectId: listing.id, changed: false };
+      }
       const updated = await updateListingRow(trx, ctx, listing.id, input.expectedRowVersion, {
         asking_price_minor: price.amountMinor,
         currency: price.currency,
@@ -242,7 +275,8 @@ export async function setAskingPrice(
         },
       };
     },
-    replay: () => getListing(trx, listing.id),
+    serialize: storeListing,
+    revive: reviveListing,
   });
   return outcome.value;
 }
@@ -255,20 +289,22 @@ export interface ApproveContentResult {
 /**
  * LIST-105 / LIST-108: the owning seller approves one content version; any previously approved
  * version is superseded in the same transaction (SM-CT-01, SM-CT-02). Audited as
- * LISTING_CONTENT_APPROVED under the seller's idempotency key.
+ * LISTING_CONTENT_APPROVED under the seller's idempotency key. The receipt keeps the listing and
+ * the version id; the approved words are immutable (SM-CT-04), so a replay reads them back.
  */
 export async function approveContent(
   trx: TenantTransaction,
   ctx: CommandContext,
   input: { listingId: string; versionId: string; expectedRowVersion: number },
 ): Promise<ApproveContentResult> {
-  const listing = await getListing(trx, input.listingId);
-  const version = await content.getVersion(trx, listing.id, input.versionId);
   const outcome = await audit.runIdempotent<ApproveContentResult>(trx, ctx, {
+    command: 'listing.approve_content',
+    payload: input,
     eventType: 'LISTING_CONTENT_APPROVED',
     subjectType: 'content_version',
-    subjectId: version.id,
     run: async () => {
+      const listing = await getListing(trx, input.listingId);
+      const version = await content.getVersion(trx, listing.id, input.versionId);
       requireStatus(listing, 'DRAFT', 'approve content');
       if (version.status !== 'SELLER_DRAFT') {
         throw new InvalidStateError('content_version', version.status, 'be approved');
@@ -287,10 +323,12 @@ export async function approveContent(
         },
       };
     },
-    replay: async (event) => ({
-      listing: await getListing(trx, listing.id),
-      version: await content.getVersion(trx, listing.id, event.subjectId),
-    }),
+    serialize: ({ listing, version }) => ({ listing, versionId: version.id }),
+    revive: async (stored) => {
+      const listing = reviveListing(stored);
+      const versionId = z.uuid().parse(stored['versionId']);
+      return { listing, version: await content.getVersion(trx, listing.id, versionId) };
+    },
   });
   return outcome.value;
 }
@@ -304,7 +342,8 @@ export interface SetPolicyResult {
  * LIST-131 / LIST-132: a new policy version carrying the minimum price and the negotiation rules
  * becomes the listing's current policy. Audited as SELLER_POLICY_CHANGED, plus
  * MINIMUM_PRICE_CHANGED when the minimum differs from the previous version's. Neither payload
- * carries the amount (OPS-569, OPS-783).
+ * carries the amount (OPS-569, OPS-783), and neither does the receipt: it keeps the listing and
+ * the immutable policy version's id, which a replay reads back.
  */
 export async function setPolicy(
   trx: TenantTransaction,
@@ -315,23 +354,29 @@ export async function setPolicy(
     policy: Omit<policy.PolicyVersionInput, 'listingId'>;
   },
 ): Promise<SetPolicyResult> {
-  const listing = await getListing(trx, input.listingId);
-  const previous =
-    listing.currentPolicyVersionId === null
-      ? undefined
-      : await policy.getPolicyVersion(trx, listing.id, listing.currentPolicyVersionId);
+  let minimumChanged = false;
   const outcome = await audit.runIdempotent<SetPolicyResult>(trx, ctx, {
+    command: 'listing.set_policy',
+    payload: input,
     eventType: 'SELLER_POLICY_CHANGED',
     subjectType: 'listing',
-    subjectId: listing.id,
     run: async () => {
+      const listing = await getListing(trx, input.listingId);
       requireStatus(listing, 'DRAFT', 'change its policy');
+      const previous =
+        listing.currentPolicyVersionId === null
+          ? undefined
+          : await policy.getPolicyVersion(trx, listing.id, listing.currentPolicyVersionId);
       const created = await policy.createPolicyVersion(
         trx,
         ctx,
         { ...input.policy, listingId: listing.id },
         (previous?.versionNumber ?? 0) + 1,
       );
+      minimumChanged =
+        previous === undefined ||
+        previous.minimumPrice.amountMinor !== created.minimumPrice.amountMinor ||
+        previous.minimumPrice.currency !== created.minimumPrice.currency;
       const updated = await updateListingRow(trx, ctx, listing.id, input.expectedRowVersion, {
         current_policy_version_id: created.id,
       });
@@ -342,33 +387,25 @@ export async function setPolicy(
         summary: { policy_version_number: created.versionNumber },
       };
     },
-    replay: async (event) => {
-      const current = await getListing(trx, listing.id);
-      if (event.policyVersionId === null) throw new NotFoundError('policy_version');
-      return {
-        listing: current,
-        policyVersion: await policy.getPolicyVersion(trx, listing.id, event.policyVersionId),
-      };
+    serialize: ({ listing, policyVersion }) => ({ listing, policyVersionId: policyVersion.id }),
+    revive: async (stored) => {
+      const listing = reviveListing(stored);
+      const policyVersionId = z.uuid().parse(stored['policyVersionId']);
+      return { listing, policyVersion: await policy.getPolicyVersion(trx, listing.id, policyVersionId) };
     },
   });
-  if (!outcome.replayed) {
+  if (!outcome.replayed && minimumChanged) {
     const created = outcome.value.policyVersion;
-    const minimumChanged =
-      previous === undefined ||
-      previous.minimumPrice.amountMinor !== created.minimumPrice.amountMinor ||
-      previous.minimumPrice.currency !== created.minimumPrice.currency;
-    if (minimumChanged) {
-      await audit.appendAuditEvent(trx, ctx.sellerId, {
-        eventType: 'MINIMUM_PRICE_CHANGED',
-        actorType: 'SELLER',
-        actorRef: ctx.sellerId,
-        subjectType: 'listing',
-        subjectId: listing.id,
-        policyVersionId: created.id,
-        requestId: ctx.requestId,
-        summary: { policy_version_number: created.versionNumber },
-      });
-    }
+    await audit.appendAuditEvent(trx, ctx.sellerId, {
+      eventType: 'MINIMUM_PRICE_CHANGED',
+      actorType: 'SELLER',
+      actorRef: ctx.sellerId,
+      subjectType: 'listing',
+      subjectId: outcome.value.listing.id,
+      policyVersionId: created.id,
+      requestId: ctx.requestId,
+      summary: { policy_version_number: created.versionNumber },
+    });
   }
   return outcome.value;
 }
@@ -414,12 +451,13 @@ export async function markReady(
   ctx: CommandContext,
   input: { listingId: string; expectedRowVersion: number },
 ): Promise<ListingRecord> {
-  const listing = await getListing(trx, input.listingId);
   const outcome = await audit.runIdempotent<ListingRecord>(trx, ctx, {
+    command: 'listing.mark_ready',
+    payload: input,
     eventType: 'LISTING_STATUS_CHANGED',
     subjectType: 'listing',
-    subjectId: listing.id,
     run: async () => {
+      const listing = await getListing(trx, input.listingId);
       requireStatus(listing, 'DRAFT', 'become READY');
       const gaps = await readinessGaps(trx, listing);
       if (gaps.length > 0) throw new ListingNotReadyError(gaps);
@@ -435,7 +473,8 @@ export async function markReady(
         summary: { from: 'DRAFT', to: 'READY', row_version: updated.rowVersion },
       };
     },
-    replay: () => getListing(trx, listing.id),
+    serialize: storeListing,
+    revive: reviveListing,
   });
   return outcome.value;
 }
@@ -446,12 +485,13 @@ export async function revertToDraft(
   ctx: CommandContext,
   input: { listingId: string; expectedRowVersion: number },
 ): Promise<ListingRecord> {
-  const listing = await getListing(trx, input.listingId);
   const outcome = await audit.runIdempotent<ListingRecord>(trx, ctx, {
+    command: 'listing.revert_to_draft',
+    payload: input,
     eventType: 'LISTING_STATUS_CHANGED',
     subjectType: 'listing',
-    subjectId: listing.id,
     run: async () => {
+      const listing = await getListing(trx, input.listingId);
       requireStatus(listing, 'READY', 'return to DRAFT');
       const updated = await updateListingRow(trx, ctx, listing.id, input.expectedRowVersion, {
         status: 'DRAFT',
@@ -465,7 +505,8 @@ export async function revertToDraft(
         summary: { from: 'READY', to: 'DRAFT', row_version: updated.rowVersion },
       };
     },
-    replay: () => getListing(trx, listing.id),
+    serialize: storeListing,
+    revive: reviveListing,
   });
   return outcome.value;
 }

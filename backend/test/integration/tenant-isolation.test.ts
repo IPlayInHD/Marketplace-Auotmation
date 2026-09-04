@@ -16,6 +16,7 @@ const SELLER_OWNED = [
   'product_fact',
   'seller_policy_version',
   'audit_event',
+  'idempotency_receipt',
 ] as const;
 
 describe('Tenant isolation', () => {
@@ -320,6 +321,7 @@ describe('Tenant isolation', () => {
       product_fact: ['INSERT', 'SELECT', 'UPDATE'],
       seller_policy_version: ['INSERT', 'SELECT'],
       audit_event: ['INSERT', 'SELECT'],
+      idempotency_receipt: ['INSERT', 'SELECT'],
     });
     const schemaPrivs = await query<{
       create_db: boolean;

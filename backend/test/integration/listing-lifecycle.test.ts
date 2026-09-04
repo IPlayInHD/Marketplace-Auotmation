@@ -471,14 +471,17 @@ describe('Listing lifecycle: DRAFT to READY', () => {
     expect(bare.code).toBe(SQLSTATE.contentVersionViolation);
   });
 
-  it('keeps policy versions and audit events append-only at both layers (OPS-705, OPS-706, OPS-782)', async () => {
+  it('keeps policy versions, audit events and idempotency receipts append-only at both layers (OPS-705, OPS-706, OPS-733, OPS-782)', async () => {
     const built = await buildListing(runtime.db, sellerA);
     const policyId = built.policyVersionId ?? '';
+    const receiptsOfListing = `subject_id IN (SELECT listing_id FROM ${APP_SCHEMA}.seller_policy_version WHERE id = $1)`;
     for (const text of [
       `UPDATE ${APP_SCHEMA}.seller_policy_version SET minimum_price_minor = 1 WHERE id = $1`,
       `DELETE FROM ${APP_SCHEMA}.seller_policy_version WHERE id = $1`,
       `UPDATE ${APP_SCHEMA}.audit_event SET summary = '{}' WHERE policy_version_id = $1`,
       `DELETE FROM ${APP_SCHEMA}.audit_event WHERE policy_version_id = $1`,
+      `UPDATE ${APP_SCHEMA}.idempotency_receipt SET outcome = '{}' WHERE ${receiptsOfListing}`,
+      `DELETE FROM ${APP_SCHEMA}.idempotency_receipt WHERE ${receiptsOfListing}`,
     ]) {
       const asRuntime = await expectPgError(env.runtimeUrl, text, [policyId], (client) =>
         setTenant(client, sellerA),
