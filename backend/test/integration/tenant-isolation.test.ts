@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { APP_SCHEMA, MIGRATION_SCHEMA, ROLES, SQLSTATE, TENANT_SETTING } from '../../src/db/constants.ts';
 import { createDb, withTenant } from '../../src/db/kysely.ts';
 import { startDatabase, type TestDatabase } from '../helpers/database.ts';
-import { buildListing, FIXTURE, seedSeller } from '../helpers/fixtures.ts';
+import { FIXTURE, publishListing, seedSeller } from '../helpers/fixtures.ts';
 import { expectPgError, query, withClient } from '../helpers/inspect.ts';
 
 // SEC-100, SEC-101, OPS-716, D-17: tenant isolation at the data layer, fail-closed context,
@@ -17,6 +17,8 @@ const SELLER_OWNED = [
   'seller_policy_version',
   'audit_event',
   'idempotency_receipt',
+  'public_listing_access',
+  'listing_access_code',
 ] as const;
 
 describe('Tenant isolation', () => {
@@ -33,10 +35,11 @@ describe('Tenant isolation', () => {
     try {
       sellerA = await seedSeller(runtime.db, FIXTURE.sellers.a);
       sellerB = await seedSeller(runtime.db, FIXTURE.sellers.b);
-      listingA = (await buildListing(runtime.db, sellerA)).listingId;
-      const b = await buildListing(runtime.db, sellerB);
-      listingB = b.listingId;
-      policyB = b.policyVersionId ?? '';
+      // Published listings, so every seller-owned table, access and codes included, holds rows.
+      listingA = (await publishListing(runtime.db, sellerA)).built.listingId;
+      const b = await publishListing(runtime.db, sellerB);
+      listingB = b.built.listingId;
+      policyB = b.built.policyVersionId ?? '';
     } finally {
       await runtime.close();
     }
@@ -322,6 +325,8 @@ describe('Tenant isolation', () => {
       seller_policy_version: ['INSERT', 'SELECT'],
       audit_event: ['INSERT', 'SELECT'],
       idempotency_receipt: ['INSERT', 'SELECT'],
+      public_listing_access: ['INSERT', 'SELECT', 'UPDATE'],
+      listing_access_code: ['INSERT', 'SELECT', 'UPDATE'],
     });
     const schemaPrivs = await query<{
       create_db: boolean;

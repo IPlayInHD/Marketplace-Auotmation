@@ -12,20 +12,20 @@ image later, two entry points (`web` here; `worker` is not yet part of any slice
 
 The listing-domain foundation and the DRAFT → READY transition:
 
-| Concern                                                                                                                                                   | Where                                                              | Canonical anchor                               |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------- |
-| Forward-only SQL migrations, ledger with checksums, advisory-locked runner                                                                                | `src/db/migrate.ts`, `src/db/migrations/`                          | `OPS-513`, `OPS-514`, `OPS-714`                |
-| Roles: `app_migrator` owns everything; `app_runtime` is DML-only, no DDL, no `BYPASSRLS`                                                                  | `src/db/migrate.ts` (bootstrap), migration grants                  | `OPS-716`, D-17                                |
-| Row-level security on every seller-owned table, forced for the owner, fail-closed without context                                                         | migration `0001`                                                   | `SEC-100`, `SEC-101`                           |
-| Single tenant-context construction site, transaction-scoped                                                                                               | `src/db/kysely.ts` `withTenant()`                                  | `SEC-101`                                      |
-| Entities: `seller`, `inventory_item`, `listing`, `listing_content_version`, `product_fact`, `seller_policy_version`, `audit_event`, `idempotency_receipt` | migrations `0001`, `0003`, `src/db/schema.ts`                      | `DOMAIN_MODEL.md`, `DM-01`, `DM-06`, `DM-07`   |
-| Listing lifecycle guard: only the drawn transitions, SM-L-01 prerequisites named, `row_version` increment                                                 | migration `0001` triggers, `src/modules/listings/`                 | `STATE_MACHINES.md` §1, `OPS-707`, `OPS-738`   |
-| Content version guard: words immutable, only §8 transitions, one APPROVED per listing                                                                     | migration `0001` triggers                                          | `STATE_MACHINES.md` §8, `SM-CT-01`, `OPS-706`  |
-| Seller-provided facts as the only provenance; approved copy details must be backed by facts                                                               | `product_fact` constraint, READY guard                             | D-10, `INV-12`                                 |
-| Minimum price on the policy version only, protected; buyer-safe projection cannot hold it                                                                 | `src/modules/seller-policy/`, `src/modules/public-listing-access/` | D-04, `SEC-021`, `OPS-724`                     |
-| Append-only audit events with request id, actor, subject, policy version; idempotency receipts with command fingerprint and stored outcome                | `src/modules/audit/`                                               | `OPS-780` to `OPS-784`, `OPS-730` to `OPS-733` |
-| Module boundaries enforced in the build                                                                                                                   | `.dependency-cruiser.cjs`                                          | `ARCH` §3, `OPS-702`                           |
-| Fastify `web` skeleton: `/health`, empty seller and buyer route trees, loopback bind                                                                      | `src/web/`                                                         | `ARCH-002`, `AUTH-222`, D-18                   |
+| Concern                                                                                                                                                                                                   | Where                                                              | Canonical anchor                               |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------- |
+| Forward-only SQL migrations, ledger with checksums, advisory-locked runner                                                                                                                                | `src/db/migrate.ts`, `src/db/migrations/`                          | `OPS-513`, `OPS-514`, `OPS-714`                |
+| Roles: `app_migrator` owns everything; `app_runtime` is DML-only, no DDL, no `BYPASSRLS`                                                                                                                  | `src/db/migrate.ts` (bootstrap), migration grants                  | `OPS-716`, D-17                                |
+| Row-level security on every seller-owned table, forced for the owner, fail-closed without context                                                                                                         | migration `0001`                                                   | `SEC-100`, `SEC-101`                           |
+| Single tenant-context construction site, transaction-scoped                                                                                                                                               | `src/db/kysely.ts` `withTenant()`                                  | `SEC-101`                                      |
+| Entities: `seller`, `inventory_item`, `listing`, `listing_content_version`, `product_fact`, `seller_policy_version`, `audit_event`, `idempotency_receipt`, `public_listing_access`, `listing_access_code` | migrations `0001`, `0003`, `0004`, `src/db/schema.ts`              | `DOMAIN_MODEL.md`, `DM-01`, `DM-06`, `DM-07`   |
+| Listing lifecycle guard: only the drawn transitions, SM-L-01 prerequisites named, `row_version` increment                                                                                                 | migration `0001` triggers, `src/modules/listings/`                 | `STATE_MACHINES.md` §1, `OPS-707`, `OPS-738`   |
+| Content version guard: words immutable, only §8 transitions, one APPROVED per listing                                                                                                                     | migration `0001` triggers                                          | `STATE_MACHINES.md` §8, `SM-CT-01`, `OPS-706`  |
+| Seller-provided facts as the only provenance; approved copy details must be backed by facts                                                                                                               | `product_fact` constraint, READY guard                             | D-10, `INV-12`                                 |
+| Minimum price on the policy version only, protected; buyer-safe projection cannot hold it                                                                                                                 | `src/modules/seller-policy/`, `src/modules/public-listing-access/` | D-04, `SEC-021`, `OPS-724`                     |
+| Append-only audit events with request id, actor, subject, policy version; idempotency receipts with command fingerprint and stored outcome                                                                | `src/modules/audit/`                                               | `OPS-780` to `OPS-784`, `OPS-730` to `OPS-733` |
+| Module boundaries enforced in the build                                                                                                                                                                   | `.dependency-cruiser.cjs`                                          | `ARCH` §3, `OPS-702`                           |
+| Fastify `web` skeleton: `/health`, empty seller and buyer route trees, loopback bind                                                                                                                      | `src/web/`                                                         | `ARCH-002`, `AUTH-222`, D-18                   |
 
 Not here, by design: authentication (Q-12 stays open), sign-up, any frontend, images,
 enhancement, AI, buyer sessions, conversations, offers, notifications, analytics, pg-boss jobs,
@@ -101,10 +101,10 @@ store (`OPS-729`).
 Two roles, created once by a superuser (`bootstrapRoles`), which is never used afterwards except
 by tests for privileged inspection.
 
-| Role           | Attributes                                                                                  | Owns                                                    | May                                                                                                                                                                                                            |
-| -------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app_migrator` | `LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT`, `CREATE` on the database | schema `app`, schema `migration` and everything in both | run migrations                                                                                                                                                                                                 |
-| `app_runtime`  | same, without `CREATE`                                                                      | nothing                                                 | `seller`, `inventory_item`, `listing`, `listing_content_version`, `product_fact`: SELECT INSERT UPDATE · `seller_policy_version`, `audit_event`, `idempotency_receipt`: SELECT INSERT · nothing on `migration` |
+| Role           | Attributes                                                                                  | Owns                                                    | May                                                                                                                                                                                                                                                                                   |
+| -------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app_migrator` | `LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT`, `CREATE` on the database | schema `app`, schema `migration` and everything in both | run migrations                                                                                                                                                                                                                                                                        |
+| `app_runtime`  | same, without `CREATE`                                                                      | nothing                                                 | `seller`, `inventory_item`, `listing`, `listing_content_version`, `product_fact`: SELECT INSERT UPDATE · `public_listing_access`, `listing_access_code`: SELECT INSERT UPDATE · `seller_policy_version`, `audit_event`, `idempotency_receipt`: SELECT INSERT · nothing on `migration` |
 
 Tenant context is `set_config('app.seller_id', <uuid>, true)` inside a transaction, established
 only by `withTenant()`. `app.current_seller_id()` returns `NULLIF(current_setting(..., true),
@@ -149,6 +149,40 @@ only by `withTenant()`. `app.current_seller_id()` returns `NULLIF(current_settin
 - Layouts that DOMAIN_MODEL.md leaves indicative (policy fields, fact keys) are fixed here as the
   LIST-002 and LIST-022 lists. If the founders read any of this as a deviation from the domain
   model, it is recorded in the decision log, per that document's own rule.
+
+## Slice 1b: public access domain
+
+Migration `0004` adds `PublicListingAccess` and `ListingAccessCode` (`DOMAIN_MODEL.md`, `DM-08`,
+`DM-09`) and the modules that own them: `src/modules/public-listing-access/` (Module 6, the surface
+record and its opaque public id; it still never imports Seller Policy or Audit) and
+`src/modules/access-codes/` (Module 7: issue, hash, verify, rotate, revoke). No buyer route exists;
+everything runs inside a seller's tenant transaction (D-18).
+
+- **Opaque public id** (`SEC-003`, `OPS-711`, `BUYER-002`): sixteen lowercase base32 characters
+  from ten CSPRNG bytes, 80 bits, generated from nothing else. One access per listing; rotation
+  and re-issue keep it (`BUYER-003`).
+- **Codes** (`BUYER-008`, `OPS-710`, `ACCESS-013`): six digits from `randomInt`, leading zeros
+  kept. The only stored form is a salted scrypt hash in a self-describing string
+  (`$scrypt$ln=14,r=8,p=1$salt$key`); a CHECK refuses any other shape, so a six-digit value cannot
+  be written. No pepper, no dependency added. A miss costs one derivation like a hit.
+- **READY → LISTED** (`SM-L-02`, `ACCESS-100`): `markListed` locks the listing row, creates or
+  re-enables the access, issues the initial ACTIVE code, writes `ACCESS_CODE_CREATED`, then moves
+  the listing and writes `LISTING_STATUS_CHANGED` under the seller's key, all in one transaction.
+  A trigger refuses LISTED without an enabled access carrying an ACTIVE code (`LS005`).
+- **Rotate, revoke, re-issue** (`SM-C-01`, `SM-C-02`, `OPS-737`, `ACCESS-101`, `ACCESS-102`):
+  the access row's version predicate takes the lock first, so concurrent commands serialise and
+  the loser sees a concurrency error; a partial unique index allows one ACTIVE code per access;
+  a trigger allows only ACTIVE → ROTATED, REVOKED or EXPIRED and never a delete. Revocation
+  disables the surface; re-issue reopens it. Events: `ACCESS_CODE_ROTATED`,
+  `ACCESS_CODE_REVOKED`, `ACCESS_CODE_CREATED`.
+- **Replay without plaintext** (`OPS-731` with `ACCESS-013`, `DATA-106`): the plaintext exists
+  only in the return value of the command that issued it. Receipts and audit payloads store the
+  code's id, version and status; a replay returns the same outcome with `plaintextCode: null`.
+  A seller who never saw the code rotates to get a new one. The logger redacts `plaintextCode`,
+  `code` and `code_hash` as a backstop (`OPS-566`).
+- **Verification** is an internal function only: true for the ACTIVE, unexpired code of an
+  enabled access the tenant owns, false otherwise with no distinguishing error (`SM-C-03`). No
+  session, gate, rate limit or lockout exists yet; `EXPIRED` is a drawn state with no job.
 
 ## Continuous integration
 

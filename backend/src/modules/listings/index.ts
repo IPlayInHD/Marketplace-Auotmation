@@ -7,6 +7,7 @@ export {
   createInventoryItem,
   createListing,
   getListing,
+  markListed,
   markReady,
   readinessGaps,
   revertToDraft,
@@ -14,4 +15,5 @@ export {
   setPolicy,
   type InventoryItemRecord,
   type ListingRecord,
+  type MarkListedResult,
 } from './service.ts';

@@ -11,8 +11,10 @@ import {
   type ReadinessGap,
 } from '../../shared/errors.ts';
 import { MoneySchema, type Money } from '../../shared/money.ts';
+import * as accessCodes from '../access-codes/index.ts';
 import * as audit from '../audit/index.ts';
 import * as content from '../listing-content/index.ts';
+import * as publicAccess from '../public-listing-access/index.ts';
 import * as policy from '../seller-policy/index.ts';
 
 export interface InventoryItemRecord {
@@ -141,6 +143,18 @@ export async function getListing(trx: TenantTransaction, listingId: string): Pro
   const listing = await findListing(trx, listingId);
   if (!listing) throw new NotFoundError('listing');
   return listing;
+}
+
+/** The listing with its row locked for the rest of the transaction, so concurrent publications serialise. */
+async function getListingForUpdate(trx: TenantTransaction, listingId: string): Promise<ListingRecord> {
+  const row = await trx
+    .selectFrom('listing')
+    .selectAll()
+    .where('id', '=', listingId)
+    .forUpdate()
+    .executeTakeFirst();
+  if (!row) throw new NotFoundError('listing');
+  return toListing(row);
 }
 
 /** LIST-100: a listing starts in DRAFT (the data layer refuses any other start). */
@@ -507,6 +521,93 @@ export async function revertToDraft(
     },
     serialize: storeListing,
     revive: reviveListing,
+  });
+  return outcome.value;
+}
+
+export interface MarkListedResult {
+  listing: ListingRecord;
+  access: publicAccess.PublicAccessRecord;
+  /** The initial code. Its plaintext is present once, here; a replay returns it as null (ACCESS-013). */
+  code: accessCodes.IssuedAccessCode;
+}
+
+/**
+ * SM-L-02, ACCESS-100: READY → LISTED with public access issued in the same transaction. The
+ * listing row is locked first, so two publications of one listing serialise and the second is
+ * refused by state. The access record is created (or, on a relist, re-enabled), the initial
+ * ACTIVE code is issued and audited as ACCESS_CODE_CREATED, and only then does the listing become
+ * LISTED, audited as LISTING_STATUS_CHANGED under the seller's key. The data layer independently
+ * refuses LISTED without an enabled access and an ACTIVE code (LS005). Any failure leaves no
+ * listing change, no access, no code, no event and no receipt (OPS-787).
+ */
+export async function markListed(
+  trx: TenantTransaction,
+  ctx: CommandContext,
+  input: { listingId: string; expectedRowVersion: number },
+): Promise<MarkListedResult> {
+  const outcome = await audit.runIdempotent<MarkListedResult>(trx, ctx, {
+    command: 'listing.mark_listed',
+    payload: input,
+    eventType: 'LISTING_STATUS_CHANGED',
+    subjectType: 'listing',
+    run: async () => {
+      const listing = await getListingForUpdate(trx, input.listingId);
+      requireStatus(listing, 'READY', 'become LISTED');
+      if (listing.rowVersion !== input.expectedRowVersion) throw new ConcurrentModificationError('listing');
+
+      let access =
+        (await publicAccess.findPublicAccessByListing(trx, listing.id)) ??
+        (await publicAccess.createPublicAccess(trx, ctx, { listingId: listing.id }));
+      if (!access.enabled) {
+        access = await publicAccess.updatePublicAccess(trx, ctx, access.id, access.rowVersion, {
+          enabled: true,
+        });
+      }
+      if (await accessCodes.findActiveAccessCode(trx, access.id)) {
+        throw new InvalidStateError('access_code', 'ACTIVE', 'be issued while one is active (SM-C-01)');
+      }
+      const code = await accessCodes.issueCode(trx, ctx, {
+        access,
+        versionNumber: await accessCodes.nextVersionNumber(trx, access.id),
+      });
+      const policyVersionId = listing.currentPolicyVersionId ?? undefined;
+      await audit.appendAuditEvent(trx, ctx.sellerId, {
+        eventType: 'ACCESS_CODE_CREATED',
+        actorType: 'SELLER',
+        actorRef: ctx.sellerId,
+        subjectType: 'listing_access_code',
+        subjectId: code.id,
+        ...(policyVersionId !== undefined ? { policyVersionId } : {}),
+        requestId: ctx.requestId,
+        summary: { public_access_id: access.id, listing_id: listing.id, version_number: code.versionNumber },
+      });
+
+      const updated = await updateListingRow(trx, ctx, listing.id, input.expectedRowVersion, {
+        status: 'LISTED',
+      });
+      return {
+        value: { listing: updated, access, code },
+        subjectId: updated.id,
+        ...(policyVersionId !== undefined ? { policyVersionId } : {}),
+        summary: {
+          from: 'READY',
+          to: 'LISTED',
+          row_version: updated.rowVersion,
+          public_access_id: access.id,
+        },
+      };
+    },
+    serialize: ({ listing, access, code }) => ({
+      listing,
+      access,
+      issued: accessCodes.storeAccessCode(code),
+    }),
+    revive: (stored) => ({
+      listing: reviveListing(stored),
+      access: publicAccess.revivePublicAccess(stored['access']),
+      code: accessCodes.reviveIssuedAccessCode(stored['issued']),
+    }),
   });
   return outcome.value;
 }

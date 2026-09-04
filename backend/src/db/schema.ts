@@ -36,6 +36,10 @@ export type LocationDisclosureMode = 'NONE' | 'AREA';
 
 export type AuditActorType = 'SELLER' | 'BUYER_SESSION' | 'SYSTEM' | 'MODEL';
 
+/** The access-code lifecycle of architecture/STATE_MACHINES.md §2, as the database enum names it. */
+export const ACCESS_CODE_STATUSES = ['ACTIVE', 'ROTATED', 'REVOKED', 'EXPIRED'] as const;
+export type AccessCodeStatus = (typeof ACCESS_CODE_STATUSES)[number];
+
 /**
  * The audit event catalogue of ai/POLICY_AND_AUTHORIZATION.md §12, in its order. A unit test keeps
  * this list, the document and the migrations' enum identical (OPS-781).
@@ -185,6 +189,33 @@ export interface IdempotencyReceiptTable {
   created_at: Generated<Date>;
 }
 
+/** PublicListingAccess (migration 0004): the buyer-facing surface record and its opaque public id. */
+export interface PublicListingAccessTable {
+  id: Generated<string>;
+  seller_id: string;
+  listing_id: string;
+  public_id: string;
+  enabled: Generated<boolean>;
+  row_version: Generated<number>;
+  request_id: string;
+  created_at: Generated<Date>;
+  updated_at: Timestamp;
+}
+
+/** ListingAccessCode (migration 0004): a hashed code bound to one public access. No plaintext column exists. */
+export interface ListingAccessCodeTable {
+  id: Generated<string>;
+  seller_id: string;
+  public_access_id: string;
+  version_number: number;
+  status: ColumnType<AccessCodeStatus, AccessCodeStatus | undefined, AccessCodeStatus>;
+  code_hash: string;
+  issued_at: Generated<Date>;
+  expires_at: Date | null;
+  status_changed_at: Generated<Date>;
+  request_id: string;
+}
+
 export interface Database {
   seller: SellerTable;
   inventory_item: InventoryItemTable;
@@ -194,4 +225,6 @@ export interface Database {
   seller_policy_version: SellerPolicyVersionTable;
   audit_event: AuditEventTable;
   idempotency_receipt: IdempotencyReceiptTable;
+  public_listing_access: PublicListingAccessTable;
+  listing_access_code: ListingAccessCodeTable;
 }

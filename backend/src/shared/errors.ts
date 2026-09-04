@@ -71,6 +71,14 @@ export class ConcurrentModificationError extends DomainError {
   }
 }
 
+/** SM-L-02: LISTED refused because no enabled public access with an ACTIVE code exists. */
+export class PublicAccessRequiredError extends DomainError {
+  readonly code = 'PUBLIC_ACCESS_REQUIRED';
+  constructor() {
+    super('listing cannot become LISTED without an enabled public access and an ACTIVE code (SM-L-02)');
+  }
+}
+
 /** OPS-732: an idempotency key reused for a different command or with a different payload. */
 export class IdempotencyConflictError extends DomainError {
   readonly code = 'IDEMPOTENCY_CONFLICT';
@@ -115,12 +123,18 @@ export function mapDatabaseError(err: unknown, subjectType: string): unknown {
     case SQLSTATE.listingTransitionIllegal:
     case SQLSTATE.contentVersionViolation:
     case SQLSTATE.appendOnlyViolation:
+    case SQLSTATE.accessCodeTransitionIllegal:
+    case SQLSTATE.accessCodeImmutable:
+    case SQLSTATE.publicAccessImmutable:
       return new InvalidStateError(
         subjectType,
         'unknown',
         'perform a transition the state machine does not draw',
       );
+    case SQLSTATE.listingPublicAccessMissing:
+      return new PublicAccessRequiredError();
     case SQLSTATE.listingRowVersionMismatch:
+    case SQLSTATE.publicAccessRowVersionMismatch:
       return new ConcurrentModificationError(subjectType);
     default:
       return err;

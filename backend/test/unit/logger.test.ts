@@ -54,6 +54,21 @@ describe('Structured logging', () => {
     expect(FORBIDDEN_LOG_KEYS).toContain('minimum_price_minor');
   });
 
+  it('redacts an access code wherever an issued-code record is logged by mistake (SEC-040, OPS-566)', () => {
+    const { stream, lines } = capture();
+    const log = createLogger({ module: 'web', env: 'ci', release: 'test', stream });
+    const issued = { id: 'code-id', versionNumber: 1, status: 'ACTIVE', plaintextCode: '042917' };
+    log.info({ result: { listing: { status: 'LISTED' }, code: issued } }, 'publication');
+    log.info({ code: issued }, 'code');
+    log.info({ plaintextCode: '042917', plaintext_code: '042917', code_hash: '$scrypt$x' }, 'flat');
+    const out = lines.join('');
+    expect(out).not.toContain('042917');
+    expect(out).not.toContain('$scrypt$');
+    expect(out).toContain('"status":"LISTED"');
+    for (const key of ['plaintextCode', 'plaintext_code', 'code', 'code_hash'])
+      expect(FORBIDDEN_LOG_KEYS).toContain(key);
+  });
+
   it('classifies errors without interpolating data into the message', () => {
     expect(categorizeError(Object.assign(new Error('x'), { code: '40001' }))).toEqual({
       error_category: 'transient',

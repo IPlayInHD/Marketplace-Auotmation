@@ -58,6 +58,32 @@ export interface BuildOptions {
   policy?: boolean | Money;
 }
 
+export interface PublishedListing {
+  built: BuiltListing;
+  /** READY → LISTED outcome: the access record and the initial code, plaintext included. */
+  listed: listings.MarkListedResult;
+}
+
+/** Builds a complete listing, marks it READY and publishes it (READY → LISTED, SM-L-02). */
+export async function publishListing(
+  db: Kysely<Database>,
+  sellerId: string,
+  options: BuildOptions = {},
+): Promise<PublishedListing> {
+  const built = await buildListing(db, sellerId, options);
+  const listed = await withTenant(db, sellerId, async (trx) => {
+    const ready = await listings.markReady(trx, command(sellerId, 'ready'), {
+      listingId: built.listingId,
+      expectedRowVersion: built.rowVersion,
+    });
+    return listings.markListed(trx, command(sellerId, 'listed'), {
+      listingId: built.listingId,
+      expectedRowVersion: ready.rowVersion,
+    });
+  });
+  return { built, listed };
+}
+
 export interface BuiltListing {
   sellerId: string;
   inventoryItemId: string;

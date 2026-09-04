@@ -26,6 +26,7 @@ describe('Migrations', () => {
       '0001_listing_foundation.sql',
       '0002_listing_asking_price_event.sql',
       '0003_idempotency_receipt.sql',
+      '0004_public_access.sql',
     ]);
     expect(first.alreadyApplied).toEqual([]);
 
@@ -42,6 +43,7 @@ describe('Migrations', () => {
       '0001_listing_foundation.sql',
       '0002_listing_asking_price_event.sql',
       '0003_idempotency_receipt.sql',
+      '0004_public_access.sql',
     ]);
   });
 
@@ -92,8 +94,10 @@ describe('Migrations', () => {
       'idempotency_receipt',
       'inventory_item',
       'listing',
+      'listing_access_code',
       'listing_content_version',
       'product_fact',
+      'public_listing_access',
       'seller',
       'seller_policy_version',
     ]);

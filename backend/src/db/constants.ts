@@ -40,4 +40,14 @@ export const SQLSTATE = {
   contentVersionViolation: 'CV001',
   /** UPDATE or DELETE on an append-only or immutable table (OPS-705, OPS-706). */
   appendOnlyViolation: 'AP001',
+  /** LISTED entered without an enabled public access carrying an ACTIVE code (SM-L-02). */
+  listingPublicAccessMissing: 'LS005',
+  /** Public access identity columns changed, or a delete attempted. */
+  publicAccessImmutable: 'PA001',
+  /** Public access row_version was not incremented by exactly one (OPS-738). */
+  publicAccessRowVersionMismatch: 'PA002',
+  /** An access-code transition not drawn in STATE_MACHINES §2, or a code issued in another status. */
+  accessCodeTransitionIllegal: 'AC001',
+  /** Access-code identity, hash, version or expiry changed, or a delete attempted. */
+  accessCodeImmutable: 'AC002',
 } as const;
