@@ -133,6 +133,15 @@ export function mapDatabaseError(err: unknown, subjectType: string): unknown {
       );
     case SQLSTATE.listingPublicAccessMissing:
       return new PublicAccessRequiredError();
+    case SQLSTATE.listingCloseWithOpenAccess:
+      return new InvalidStateError(
+        subjectType,
+        'open',
+        'close while public access is enabled or an ACTIVE code remains (SM-L-02)',
+      );
+    case SQLSTATE.publicAccessOnClosedListing:
+    case SQLSTATE.accessCodeOnClosedAccess:
+      return new InvalidStateError(subjectType, 'closed', 'hold an open surface (SM-L-02)');
     case SQLSTATE.listingRowVersionMismatch:
     case SQLSTATE.publicAccessRowVersionMismatch:
       return new ConcurrentModificationError(subjectType);

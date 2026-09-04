@@ -38,7 +38,7 @@ export interface AuditEventRecord {
  * personal data.
  */
 const FORBIDDEN_SUMMARY_KEY =
-  /(minimum|target|concession|auto_decline|threshold|password|token|secret|code|cookie|email|phone|address|note|transcript|prompt|completion|message_body)/i;
+  /(minimum|target|concession|auto_decline|threshold|password|token|secret|code|plaintext|copy_?block|cookie|email|phone|address|note|transcript|prompt|completion|message_body)/i;
 
 export function assertAuditSummaryIsSafe(summary: Record<string, unknown>, path = ''): void {
   for (const [key, value] of Object.entries(summary)) {

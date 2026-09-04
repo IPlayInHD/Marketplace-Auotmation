@@ -18,7 +18,7 @@ The listing-domain foundation and the DRAFT → READY transition:
 | Roles: `app_migrator` owns everything; `app_runtime` is DML-only, no DDL, no `BYPASSRLS`                                                                                                                  | `src/db/migrate.ts` (bootstrap), migration grants                  | `OPS-716`, D-17                                |
 | Row-level security on every seller-owned table, forced for the owner, fail-closed without context                                                                                                         | migration `0001`                                                   | `SEC-100`, `SEC-101`                           |
 | Single tenant-context construction site, transaction-scoped                                                                                                                                               | `src/db/kysely.ts` `withTenant()`                                  | `SEC-101`                                      |
-| Entities: `seller`, `inventory_item`, `listing`, `listing_content_version`, `product_fact`, `seller_policy_version`, `audit_event`, `idempotency_receipt`, `public_listing_access`, `listing_access_code` | migrations `0001`, `0003`, `0004`, `src/db/schema.ts`              | `DOMAIN_MODEL.md`, `DM-01`, `DM-06`, `DM-07`   |
+| Entities: `seller`, `inventory_item`, `listing`, `listing_content_version`, `product_fact`, `seller_policy_version`, `audit_event`, `idempotency_receipt`, `public_listing_access`, `listing_access_code` | migrations `0001`, `0003`, `0004`, `0005`, `src/db/schema.ts`      | `DOMAIN_MODEL.md`, `DM-01`, `DM-06`, `DM-07`   |
 | Listing lifecycle guard: only the drawn transitions, SM-L-01 prerequisites named, `row_version` increment                                                                                                 | migration `0001` triggers, `src/modules/listings/`                 | `STATE_MACHINES.md` §1, `OPS-707`, `OPS-738`   |
 | Content version guard: words immutable, only §8 transitions, one APPROVED per listing                                                                                                                     | migration `0001` triggers                                          | `STATE_MACHINES.md` §8, `SM-CT-01`, `OPS-706`  |
 | Seller-provided facts as the only provenance; approved copy details must be backed by facts                                                                                                               | `product_fact` constraint, READY guard                             | D-10, `INV-12`                                 |
@@ -183,6 +183,34 @@ everything runs inside a seller's tenant transaction (D-18).
 - **Verification** is an internal function only: true for the ACTIVE, unexpired code of an
   enabled access the tenant owns, false otherwise with no distinguishing error (`SM-C-03`). No
   session, gate, rate limit or lockout exists yet; `EXPIRED` is a drawn state with no job.
+
+## Slice 1c: the lifecycle around LISTED
+
+Migration `0005` and the listings module complete the seller-controlled edges of
+`STATE_MACHINES.md` §1 around LISTED and make SM-L-02 a data-layer invariant.
+
+- **Commands** (`src/modules/listings/`): `cancelListing` (LISTED, ACTIVE_CONVERSATIONS or
+  OFFER_PENDING → CANCELLED; the ACTIVE code is REVOKED and `ACCESS_CODE_REVOKED` is written),
+  `expireListing` (LISTED → EXPIRED; the code becomes EXPIRED and the status event records it,
+  since the catalogue has no code-expiry event), `archiveListing` (CANCELLED → ARCHIVED, `OPS-224`)
+  and `relistListing` (EXPIRED → LISTED on the same listing, `SM-L-06`: the SM-L-01 prerequisites
+  are revalidated, the same access and public id are re-enabled, a fresh code version is issued and
+  no earlier code returns). Relisting from CANCELLED is not drawn: per `OPS-215` it is a new
+  listing on the same item through DRAFT → READY → LISTED. SOLD needs the deal flow and is not here.
+  Expiry is an internal command with no schedule; nothing decides when a listing expires yet.
+- **Invariant**: a listing cannot enter SOLD, CANCELLED, ARCHIVED or EXPIRED while its surface is
+  enabled or an ACTIVE code remains (`LS006`); a surface cannot be enabled, nor a code issued, for a
+  DRAFT or terminally closed listing (`PA003`, `AC003`); and deferred constraint triggers refuse, at
+  commit, any transaction that leaves an enabled surface or an ACTIVE code on a listing that is not
+  open, whatever order it wrote in. `listed_at` and `closed_at` come from the database clock.
+- **Copy block** (`src/modules/marketplace-abstractions/`, Module 22): a pure formatter that
+  builds the pasteable block of `ACCESS-103` from the buyer-safe projection, so it cannot carry a
+  protected field: approved title, description and details, price, the buyer URL
+  `<origin>/l/<public-id>` (D-02) and the code, plus the `BUYER-024` notice and nothing beyond it
+  (`INT-022`). `markListed` and `relistListing` return it when the caller supplies a buyer origin,
+  which is validated (https, or http on loopback only, no path, query, credentials or fragment) and
+  never hard-coded: hosting and the domain remain undecided (`Q-09`). It is never stored, audited
+  or logged, and it is null on a replay because the plaintext code is gone (`ACCESS-013`).
 
 ## Continuous integration
 

@@ -27,6 +27,7 @@ describe('Migrations', () => {
       '0002_listing_asking_price_event.sql',
       '0003_idempotency_receipt.sql',
       '0004_public_access.sql',
+      '0005_listed_lifecycle.sql',
     ]);
     expect(first.alreadyApplied).toEqual([]);
 
@@ -44,6 +45,7 @@ describe('Migrations', () => {
       '0002_listing_asking_price_event.sql',
       '0003_idempotency_receipt.sql',
       '0004_public_access.sql',
+      '0005_listed_lifecycle.sql',
     ]);
   });
 

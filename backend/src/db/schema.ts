@@ -106,6 +106,10 @@ export interface ListingTable {
   request_id: string;
   created_at: Generated<Date>;
   updated_at: Timestamp;
+  /** Set by the lifecycle trigger from the database clock on entry to LISTED (migration 0005). */
+  listed_at: Generated<Date | null>;
+  /** Set by the lifecycle trigger from the database clock on entry to a closing state; cleared on relist. */
+  closed_at: Generated<Date | null>;
 }
 
 export interface ListingContentVersionTable {

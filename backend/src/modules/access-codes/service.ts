@@ -247,12 +247,12 @@ export async function issueCode(
   return { ...toCode(row), plaintextCode };
 }
 
-/** ACTIVE → ROTATED or REVOKED, applied only if the row is still ACTIVE (OPS-737). */
+/** ACTIVE → ROTATED, REVOKED or EXPIRED, applied only if the row is still ACTIVE (OPS-737). */
 async function leaveActive(
   trx: TenantTransaction,
   ctx: WriteContext,
   code: AccessCodeRecord,
-  to: 'ROTATED' | 'REVOKED',
+  to: 'ROTATED' | 'REVOKED' | 'EXPIRED',
 ): Promise<AccessCodeRecord> {
   let row: CodeRow | undefined;
   try {
@@ -278,6 +278,57 @@ async function policyVersionInForce(trx: TenantTransaction, listingId: string): 
     .where('id', '=', listingId)
     .executeTakeFirst();
   return row?.current_policy_version_id ?? undefined;
+}
+
+export interface ClosedAccess {
+  access: publicAccess.PublicAccessRecord;
+  /** The code that was ACTIVE, now in its terminal status; undefined when none was ACTIVE. */
+  closed: AccessCodeRecord | undefined;
+}
+
+/**
+ * SM-L-02: closes the surface when a listing closes. Disables the access and moves the ACTIVE code
+ * to its terminal status: REVOKED when the seller cancels ("listing closes" in STATE_MACHINES §2,
+ * audited as ACCESS_CODE_REVOKED) or EXPIRED when the listing expires ("expiry reached"; the
+ * catalogue has no code-expiry event, so the listing's status event records it). Not a command:
+ * the caller's lifecycle command owns the key and the primary event.
+ */
+export async function closeAccess(
+  trx: TenantTransaction,
+  ctx: WriteContext,
+  input: {
+    access: publicAccess.PublicAccessRecord;
+    terminal: 'REVOKED' | 'EXPIRED';
+    policyVersionId?: string;
+  },
+): Promise<ClosedAccess> {
+  const access = input.access.enabled
+    ? await publicAccess.updatePublicAccess(trx, ctx, input.access.id, input.access.rowVersion, {
+        enabled: false,
+      })
+    : input.access;
+  const active = await findActiveAccessCode(trx, access.id);
+  if (!active) return { access, closed: undefined };
+  const closed = await leaveActive(trx, ctx, active, input.terminal);
+  if (input.terminal === 'REVOKED') {
+    await audit.appendAuditEvent(trx, ctx.sellerId, {
+      eventType: 'ACCESS_CODE_REVOKED',
+      actorType: 'SELLER',
+      actorRef: ctx.sellerId,
+      subjectType: 'listing_access_code',
+      subjectId: closed.id,
+      ...(input.policyVersionId !== undefined ? { policyVersionId: input.policyVersionId } : {}),
+      requestId: ctx.requestId,
+      summary: {
+        public_access_id: access.id,
+        listing_id: access.listingId,
+        version_number: closed.versionNumber,
+        surface_enabled: false,
+        cause: 'listing_closed',
+      },
+    });
+  }
+  return { access, closed };
 }
 
 export interface RotateAccessCodeResult {

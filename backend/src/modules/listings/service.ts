@@ -10,12 +10,16 @@ import {
   NotFoundError,
   type ReadinessGap,
 } from '../../shared/errors.ts';
+import { parseBuyerOrigin } from '../../shared/buyer-url.ts';
 import { MoneySchema, type Money } from '../../shared/money.ts';
 import * as accessCodes from '../access-codes/index.ts';
 import * as audit from '../audit/index.ts';
 import * as content from '../listing-content/index.ts';
+import * as marketplace from '../marketplace-abstractions/index.ts';
 import * as publicAccess from '../public-listing-access/index.ts';
 import * as policy from '../seller-policy/index.ts';
+import * as sellers from '../sellers/index.ts';
+import { isListingTransitionAllowed } from './lifecycle.ts';
 
 export interface InventoryItemRecord {
   id: string;
@@ -37,6 +41,10 @@ export interface ListingRecord {
   rowVersion: number;
   createdAt: Date;
   updatedAt: Date;
+  /** Database time of the latest entry to LISTED (INVENTORY_AND_SALES §3.2). */
+  listedAt: Date | null;
+  /** Database time of entry to SOLD, CANCELLED, ARCHIVED or EXPIRED; null while open or after a relist. */
+  closedAt: Date | null;
 }
 
 interface ListingRow {
@@ -51,6 +59,8 @@ interface ListingRow {
   row_version: number;
   created_at: Date;
   updated_at: Date;
+  listed_at: Date | null;
+  closed_at: Date | null;
 }
 
 function toListing(row: ListingRow): ListingRecord {
@@ -68,6 +78,8 @@ function toListing(row: ListingRow): ListingRecord {
     rowVersion: row.row_version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    listedAt: row.listed_at,
+    closedAt: row.closed_at,
   };
 }
 
@@ -87,6 +99,8 @@ const StoredListing = z.object({
   rowVersion: z.number().int(),
   createdAt: z.coerce.date(),
   updatedAt: z.coerce.date(),
+  listedAt: z.coerce.date().nullable(),
+  closedAt: z.coerce.date().nullable(),
 });
 
 function storeListing(listing: ListingRecord): Record<string, unknown> {
@@ -528,9 +542,91 @@ export async function revertToDraft(
 export interface MarkListedResult {
   listing: ListingRecord;
   access: publicAccess.PublicAccessRecord;
-  /** The initial code. Its plaintext is present once, here; a replay returns it as null (ACCESS-013). */
+  /** The issued code. Its plaintext is present once, here; a replay returns it as null (ACCESS-013). */
   code: accessCodes.IssuedAccessCode;
+  /**
+   * The pasteable marketplace block (ACCESS-103), present only when a buyer origin was supplied
+   * and the plaintext is available, so null on a replay. Never stored, logged or audited.
+   */
+  copyBlock: marketplace.MarketplaceCopyBlock | null;
 }
+
+/** Validates the caller-supplied origin up front; a malformed origin never reaches a key or a receipt. */
+function normaliseBuyerOrigin(buyerOrigin: string | undefined): string | undefined {
+  return buyerOrigin === undefined ? undefined : parseBuyerOrigin(buyerOrigin);
+}
+
+/** The copy block for a freshly issued code, from the buyer-safe projection only (SEC-020, DM-10). */
+async function composeCopyBlock(
+  trx: TenantTransaction,
+  ctx: CommandContext,
+  listing: ListingRecord,
+  access: publicAccess.PublicAccessRecord,
+  code: accessCodes.IssuedAccessCode,
+  buyerOrigin: string | undefined,
+): Promise<marketplace.MarketplaceCopyBlock | null> {
+  if (buyerOrigin === undefined || code.plaintextCode === null || listing.askingPrice === null) return null;
+  const approved = await content.getApprovedVersion(trx, listing.id);
+  if (!approved) return null;
+  const seller = await sellers.getSeller(trx, ctx.sellerId);
+  const projection = publicAccess.buildBuyerSafeProjection({
+    content: approved,
+    askingPrice: listing.askingPrice,
+    sellerDisplayName: seller.displayName,
+  });
+  return marketplace.buildMarketplaceCopyBlock({
+    listing: projection,
+    publicId: access.publicId,
+    plaintextCode: code.plaintextCode,
+    buyerOrigin,
+  });
+}
+
+/** Opens the surface and issues the next code for a listing about to become LISTED (SM-L-02). */
+async function openAccessAndIssue(
+  trx: TenantTransaction,
+  ctx: CommandContext,
+  listing: ListingRecord,
+): Promise<{ access: publicAccess.PublicAccessRecord; code: accessCodes.IssuedAccessCode }> {
+  let access =
+    (await publicAccess.findPublicAccessByListing(trx, listing.id)) ??
+    (await publicAccess.createPublicAccess(trx, ctx, { listingId: listing.id }));
+  if (!access.enabled) {
+    access = await publicAccess.updatePublicAccess(trx, ctx, access.id, access.rowVersion, { enabled: true });
+  }
+  if (await accessCodes.findActiveAccessCode(trx, access.id)) {
+    throw new InvalidStateError('access_code', 'ACTIVE', 'be issued while one is active (SM-C-01)');
+  }
+  const code = await accessCodes.issueCode(trx, ctx, {
+    access,
+    versionNumber: await accessCodes.nextVersionNumber(trx, access.id),
+  });
+  const policyVersionId = listing.currentPolicyVersionId ?? undefined;
+  await audit.appendAuditEvent(trx, ctx.sellerId, {
+    eventType: 'ACCESS_CODE_CREATED',
+    actorType: 'SELLER',
+    actorRef: ctx.sellerId,
+    subjectType: 'listing_access_code',
+    subjectId: code.id,
+    ...(policyVersionId !== undefined ? { policyVersionId } : {}),
+    requestId: ctx.requestId,
+    summary: { public_access_id: access.id, listing_id: listing.id, version_number: code.versionNumber },
+  });
+  return { access, code };
+}
+
+const storePublished = ({ listing, access, code }: MarkListedResult): Record<string, unknown> => ({
+  listing,
+  access,
+  issued: accessCodes.storeAccessCode(code),
+});
+
+const revivePublished = (stored: Record<string, unknown>): MarkListedResult => ({
+  listing: reviveListing(stored),
+  access: publicAccess.revivePublicAccess(stored['access']),
+  code: accessCodes.reviveIssuedAccessCode(stored['issued']),
+  copyBlock: null,
+});
 
 /**
  * SM-L-02, ACCESS-100: READY → LISTED with public access issued in the same transaction. The
@@ -544,50 +640,26 @@ export interface MarkListedResult {
 export async function markListed(
   trx: TenantTransaction,
   ctx: CommandContext,
-  input: { listingId: string; expectedRowVersion: number },
+  input: { listingId: string; expectedRowVersion: number; buyerOrigin?: string },
 ): Promise<MarkListedResult> {
+  const buyerOrigin = normaliseBuyerOrigin(input.buyerOrigin);
   const outcome = await audit.runIdempotent<MarkListedResult>(trx, ctx, {
     command: 'listing.mark_listed',
-    payload: input,
+    payload: { listingId: input.listingId, expectedRowVersion: input.expectedRowVersion, buyerOrigin },
     eventType: 'LISTING_STATUS_CHANGED',
     subjectType: 'listing',
     run: async () => {
       const listing = await getListingForUpdate(trx, input.listingId);
       requireStatus(listing, 'READY', 'become LISTED');
       if (listing.rowVersion !== input.expectedRowVersion) throw new ConcurrentModificationError('listing');
-
-      let access =
-        (await publicAccess.findPublicAccessByListing(trx, listing.id)) ??
-        (await publicAccess.createPublicAccess(trx, ctx, { listingId: listing.id }));
-      if (!access.enabled) {
-        access = await publicAccess.updatePublicAccess(trx, ctx, access.id, access.rowVersion, {
-          enabled: true,
-        });
-      }
-      if (await accessCodes.findActiveAccessCode(trx, access.id)) {
-        throw new InvalidStateError('access_code', 'ACTIVE', 'be issued while one is active (SM-C-01)');
-      }
-      const code = await accessCodes.issueCode(trx, ctx, {
-        access,
-        versionNumber: await accessCodes.nextVersionNumber(trx, access.id),
-      });
-      const policyVersionId = listing.currentPolicyVersionId ?? undefined;
-      await audit.appendAuditEvent(trx, ctx.sellerId, {
-        eventType: 'ACCESS_CODE_CREATED',
-        actorType: 'SELLER',
-        actorRef: ctx.sellerId,
-        subjectType: 'listing_access_code',
-        subjectId: code.id,
-        ...(policyVersionId !== undefined ? { policyVersionId } : {}),
-        requestId: ctx.requestId,
-        summary: { public_access_id: access.id, listing_id: listing.id, version_number: code.versionNumber },
-      });
-
+      const { access, code } = await openAccessAndIssue(trx, ctx, listing);
       const updated = await updateListingRow(trx, ctx, listing.id, input.expectedRowVersion, {
         status: 'LISTED',
       });
+      const copyBlock = await composeCopyBlock(trx, ctx, updated, access, code, buyerOrigin);
+      const policyVersionId = listing.currentPolicyVersionId ?? undefined;
       return {
-        value: { listing: updated, access, code },
+        value: { listing: updated, access, code, copyBlock },
         subjectId: updated.id,
         ...(policyVersionId !== undefined ? { policyVersionId } : {}),
         summary: {
@@ -598,16 +670,179 @@ export async function markListed(
         },
       };
     },
-    serialize: ({ listing, access, code }) => ({
-      listing,
-      access,
-      issued: accessCodes.storeAccessCode(code),
-    }),
-    revive: (stored) => ({
-      listing: reviveListing(stored),
-      access: publicAccess.revivePublicAccess(stored['access']),
-      code: accessCodes.reviveIssuedAccessCode(stored['issued']),
-    }),
+    serialize: storePublished,
+    revive: revivePublished,
+  });
+  return outcome.value;
+}
+
+export interface CloseListingResult {
+  listing: ListingRecord;
+  /** The surface, now disabled; null when the listing never had one. */
+  access: publicAccess.PublicAccessRecord | null;
+  /** The code that was ACTIVE, now REVOKED (cancel) or EXPIRED (expiry); null when none was. */
+  closed: accessCodes.AccessCodeRecord | null;
+}
+
+const storeClosed = ({ listing, access, closed }: CloseListingResult): Record<string, unknown> => ({
+  listing,
+  access,
+  closed: closed === null ? null : accessCodes.storeAccessCode(closed),
+});
+
+const reviveClosed = (stored: Record<string, unknown>): CloseListingResult => ({
+  listing: reviveListing(stored),
+  access: stored['access'] === null ? null : publicAccess.revivePublicAccess(stored['access']),
+  closed: stored['closed'] === null ? null : accessCodes.reviveAccessCode(stored['closed']),
+});
+
+/**
+ * One closing transition (SM-L-02): the listing row is locked, the caller's version is asserted,
+ * the surface is disabled and the ACTIVE code ended with the terminal status, then the listing
+ * moves, all in one transaction. The data layer refuses the move while access is open (LS006).
+ */
+async function closeListing(
+  trx: TenantTransaction,
+  ctx: CommandContext,
+  input: { listingId: string; expectedRowVersion: number },
+  command: string,
+  to: 'CANCELLED' | 'EXPIRED' | 'ARCHIVED',
+  terminal: 'REVOKED' | 'EXPIRED',
+): Promise<CloseListingResult> {
+  const outcome = await audit.runIdempotent<CloseListingResult>(trx, ctx, {
+    command,
+    payload: input,
+    eventType: 'LISTING_STATUS_CHANGED',
+    subjectType: 'listing',
+    run: async () => {
+      const listing = await getListingForUpdate(trx, input.listingId);
+      if (!isListingTransitionAllowed(listing.status, to)) {
+        throw new InvalidStateError('listing', listing.status, `become ${to}`);
+      }
+      if (listing.rowVersion !== input.expectedRowVersion) throw new ConcurrentModificationError('listing');
+      const policyVersionId = listing.currentPolicyVersionId ?? undefined;
+      const existing = await publicAccess.findPublicAccessByListing(trx, listing.id);
+      const closure = existing
+        ? await accessCodes.closeAccess(trx, ctx, {
+            access: existing,
+            terminal,
+            ...(policyVersionId !== undefined ? { policyVersionId } : {}),
+          })
+        : undefined;
+      const updated = await updateListingRow(trx, ctx, listing.id, input.expectedRowVersion, { status: to });
+      return {
+        value: { listing: updated, access: closure?.access ?? null, closed: closure?.closed ?? null },
+        subjectId: updated.id,
+        ...(policyVersionId !== undefined ? { policyVersionId } : {}),
+        summary: {
+          from: listing.status,
+          to,
+          row_version: updated.rowVersion,
+          public_access_id: closure?.access.id ?? null,
+          ...(closure?.closed
+            ? {
+                access_terminal_status: closure.closed.status,
+                access_version_number: closure.closed.versionNumber,
+              }
+            : {}),
+        },
+      };
+    },
+    serialize: storeClosed,
+    revive: reviveClosed,
+  });
+  return outcome.value;
+}
+
+/**
+ * STATE_MACHINES §1: LISTED, ACTIVE_CONVERSATIONS or OFFER_PENDING → CANCELLED (OPS-254: never
+ * from PENDING_SALE). Closes the surface and REVOKES the ACTIVE code (ACCESS_CODE_REVOKED), then
+ * moves the listing (LISTING_STATUS_CHANGED). Returns no plaintext. Buyer sessions do not exist
+ * in this slice, so the UX-109 confirmation about live conversations is not here.
+ */
+export function cancelListing(
+  trx: TenantTransaction,
+  ctx: CommandContext,
+  input: { listingId: string; expectedRowVersion: number },
+): Promise<CloseListingResult> {
+  return closeListing(trx, ctx, input, 'listing.cancel', 'CANCELLED', 'REVOKED');
+}
+
+/**
+ * STATE_MACHINES §1: LISTED → EXPIRED, the optional expiry. An internal domain command with no
+ * schedule: nothing in this slice decides when a listing expires, and no caller-supplied time is
+ * trusted. The closing time is the database clock (closed_at). The ACTIVE code becomes EXPIRED
+ * ("expiry reached", STATE_MACHINES §2); the catalogue has no code-expiry event, so the listing's
+ * LISTING_STATUS_CHANGED event records the code's terminal status and version.
+ */
+export function expireListing(
+  trx: TenantTransaction,
+  ctx: CommandContext,
+  input: { listingId: string; expectedRowVersion: number },
+): Promise<CloseListingResult> {
+  return closeListing(trx, ctx, input, 'listing.expire', 'EXPIRED', 'EXPIRED');
+}
+
+/**
+ * OPS-224, STATE_MACHINES §1: CANCELLED → ARCHIVED (and SOLD → ARCHIVED once a sale can exist;
+ * never from PENDING_SALE, OPS-228). The surface was closed on cancellation and the data layer
+ * requires it still closed. Audited as LISTING_STATUS_CHANGED (OPS-310).
+ */
+export function archiveListing(
+  trx: TenantTransaction,
+  ctx: CommandContext,
+  input: { listingId: string; expectedRowVersion: number },
+): Promise<CloseListingResult> {
+  return closeListing(trx, ctx, input, 'listing.archive', 'ARCHIVED', 'REVOKED');
+}
+
+/**
+ * STATE_MACHINES §1, SM-L-06: EXPIRED → LISTED on the same listing. The SM-L-01 prerequisites are
+ * revalidated in full (approved copy current, asking price, policy version, currency match, facts
+ * backing every detail); the same public access is re-enabled, so the buyer URL is preserved
+ * (BUYER-003, DM-09); a fresh code version is issued and audited as ACCESS_CODE_CREATED, and no
+ * earlier code returns to ACTIVE. Relisting from CANCELLED is not drawn: per OPS-215 it is a new
+ * listing on the same item through the ordinary DRAFT → READY → LISTED path. The plaintext code
+ * and the copy block are present only on the first successful execution.
+ */
+export async function relistListing(
+  trx: TenantTransaction,
+  ctx: CommandContext,
+  input: { listingId: string; expectedRowVersion: number; buyerOrigin?: string },
+): Promise<MarkListedResult> {
+  const buyerOrigin = normaliseBuyerOrigin(input.buyerOrigin);
+  const outcome = await audit.runIdempotent<MarkListedResult>(trx, ctx, {
+    command: 'listing.relist',
+    payload: { listingId: input.listingId, expectedRowVersion: input.expectedRowVersion, buyerOrigin },
+    eventType: 'LISTING_STATUS_CHANGED',
+    subjectType: 'listing',
+    run: async () => {
+      const listing = await getListingForUpdate(trx, input.listingId);
+      requireStatus(listing, 'EXPIRED', 'be relisted');
+      if (listing.rowVersion !== input.expectedRowVersion) throw new ConcurrentModificationError('listing');
+      const gaps = await readinessGaps(trx, listing);
+      if (gaps.length > 0) throw new ListingNotReadyError(gaps);
+      const { access, code } = await openAccessAndIssue(trx, ctx, listing);
+      const updated = await updateListingRow(trx, ctx, listing.id, input.expectedRowVersion, {
+        status: 'LISTED',
+      });
+      const copyBlock = await composeCopyBlock(trx, ctx, updated, access, code, buyerOrigin);
+      const policyVersionId = listing.currentPolicyVersionId ?? undefined;
+      return {
+        value: { listing: updated, access, code, copyBlock },
+        subjectId: updated.id,
+        ...(policyVersionId !== undefined ? { policyVersionId } : {}),
+        summary: {
+          from: 'EXPIRED',
+          to: 'LISTED',
+          row_version: updated.rowVersion,
+          public_access_id: access.id,
+          access_version_number: code.versionNumber,
+        },
+      };
+    },
+    serialize: storePublished,
+    revive: revivePublished,
   });
   return outcome.value;
 }

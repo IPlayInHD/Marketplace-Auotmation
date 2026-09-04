@@ -14,6 +14,8 @@ export const FORBIDDEN_LOG_KEYS = [
   'access_code',
   'plaintextCode',
   'plaintext_code',
+  'copyBlock',
+  'copy_block',
   'code',
   'codeHash',
   'code_hash',

@@ -50,4 +50,10 @@ export const SQLSTATE = {
   accessCodeTransitionIllegal: 'AC001',
   /** Access-code identity, hash, version or expiry changed, or a delete attempted. */
   accessCodeImmutable: 'AC002',
+  /** A closing state entered while public access is enabled or an ACTIVE code remains (SM-L-02). */
+  listingCloseWithOpenAccess: 'LS006',
+  /** Public access enabled for a listing that is closed, a DRAFT, or not open at commit (SM-L-02). */
+  publicAccessOnClosedListing: 'PA003',
+  /** An ACTIVE code without an enabled access on an open listing (SM-L-02). */
+  accessCodeOnClosedAccess: 'AC003',
 } as const;

@@ -5,6 +5,7 @@
 export {
   ACCESS_CODE_LENGTH,
   SCRYPT_PARAMS,
+  closeAccess,
   findActiveAccessCode,
   generateAccessCode,
   hashAccessCode,
@@ -21,6 +22,7 @@ export {
   verifyAccessCode,
   verifyAccessCodeHash,
   type AccessCodeRecord,
+  type ClosedAccess,
   type IssuedAccessCode,
   type IssueAccessCodeResult,
   type RevokeAccessCodeResult,

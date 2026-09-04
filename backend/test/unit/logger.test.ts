@@ -61,12 +61,14 @@ describe('Structured logging', () => {
     log.info({ result: { listing: { status: 'LISTED' }, code: issued } }, 'publication');
     log.info({ code: issued }, 'code');
     log.info({ plaintextCode: '042917', plaintext_code: '042917', code_hash: '$scrypt$x' }, 'flat');
+    log.info({ published: { copyBlock: { text: 'Access code: 042917', buyerUrl: 'x' } } }, 'block');
     const out = lines.join('');
     expect(out).not.toContain('042917');
     expect(out).not.toContain('$scrypt$');
     expect(out).toContain('"status":"LISTED"');
-    for (const key of ['plaintextCode', 'plaintext_code', 'code', 'code_hash'])
+    for (const key of ['plaintextCode', 'plaintext_code', 'code', 'code_hash', 'copyBlock', 'copy_block']) {
       expect(FORBIDDEN_LOG_KEYS).toContain(key);
+    }
   });
 
   it('classifies errors without interpolating data into the message', () => {
