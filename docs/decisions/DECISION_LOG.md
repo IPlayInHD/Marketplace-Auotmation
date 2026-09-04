@@ -495,12 +495,13 @@ proposal to expose a surface to a non-founder. Any resolution of `Q-07`.
 ---
 
 ## D-19 — Seller authentication approach
-**Date** 2026-09-04 · **Status** Proposed · **Resolves, if accepted** `Q-12` · **Depends on** D-17 (Accepted), D-18 (Accepted)
+**Date** 2026-09-04 · **Status** Accepted (2026-09-04) · **Resolves** `Q-12` · **Depends on** D-17 (Accepted), D-18 (Accepted)
 
 **Proposal.** Seller authentication is built as a first-party Identity & Auth module
 (`architecture/ARCHITECTURE.md` §3 module 1) from focused, maintained primitives already in
-the D-17 baseline, not from an authentication framework. Production implementation remains
-**unauthorized** until this entry is Accepted; `Q-12` stays open until then.
+the D-17 baseline, not from an authentication framework. Accepted on 2026-09-04 by founder
+decision (see **Acceptance** below); production implementation is authorised only inside the
+acceptance conditions recorded there.
 
 | Concern | Proposed mechanism | Exact evaluated version |
 |---|---|---|
@@ -597,3 +598,55 @@ native addon.
 (`Q-11`), hosting and hostname (`Q-09`), social login, second factor, buyer authentication.
 Accepting this entry authorises the production implementation scope above and nothing else;
 D-18's private-alpha boundaries apply unchanged.
+
+**Acceptance.** Accepted on 2026-09-04 by founder decision, on the evidence of
+`spikes/authentication/` at commit `1979dd01d28f6742056188b759d1107bd2883e53` (23 of 23 tests in
+3 files, three runs, `npm audit` with no findings) and on the decisive claims re-verified at
+acceptance: `crypto.argon2` is present on Node.js 24.20.0 (documented "Added in: v24.7.0";
+the v24.19.0 changelog marks it stable) and reproduces the reference implementation's
+Argon2id vectors; `@fastify/cookie` 11.1.2 is MIT with two dependencies and declares Fastify
+`^5.x` compatibility; better-auth 1.7.2 persists `session.token` as generated
+(`token: generateId(32)` in `internal-adapter.ts`, documented as "The session token. Which is
+also used as the session cookie") and looks sessions up by that raw value. `Q-12` is resolved
+by this entry. Together with D-17 this entry is the approved seller-authentication baseline.
+
+**The accepted approach.**
+
+- A narrow first-party Identity & Auth module (`architecture/ARCHITECTURE.md` §3 module 1).
+- Node.js built-in `crypto.argon2` with the Argon2id variant for password verifiers.
+- `@fastify/cookie` for cookie parsing and serialisation.
+- PostgreSQL and Kysely-owned account and opaque-session storage in the forward-only ledger.
+- Only SHA-256 hashes of session tokens stored.
+- Transaction-scoped seller resolution followed by the row-level-security context.
+- No general authentication framework. No external identity SaaS.
+
+**Acceptance conditions.** Mandatory implementation conditions, not follow-ups. Each is a
+blocking test or build check under `engineering/SYSTEM_REQUIREMENTS.md` conventions, and a
+change that weakens one requires a superseding entry.
+
+| # | Area | Condition |
+|---|---|---|
+| 1 | Runtime baseline | Pin a Node.js version that provides the proven `crypto.argon2` API. Production startup fails closed when the required Argon2id capability is unavailable. No silent fallback to another password library. Adding `@node-rs/argon2` or any other fallback requires a separate dependency and security review (`SEC-381`). |
+| 2 | Password security | Argon2id parameters stay policy-controlled. A fresh CSPRNG salt of at least 16 bytes per verifier. Bounded PHC parsing and `needsRehash` behaviour preserved as proven in the spike. The asynchronous Argon2 API on request paths. Passwords, salts, verifiers and derived keys are never logged or audited (`AUTH-201`, `OPS-567`, `OPS-783`). |
+| 3 | Session security | Opaque 32-byte CSPRNG tokens. Only SHA-256 token hashes stored; raw tokens never stored or logged (`AUTH-205`, `OPS-712`). Idle and absolute expiry decided server-side (`AUTH-207`). Rotation, single-session revocation and revoke-all (`AUTH-206`, `AUTH-208`, `AUTH-209`, `AUTH-219`). Authentication establishes the seller identity before the transaction-local RLS context is set, in the same transaction (`SEC-101`). No seller identity from a request body, query parameter or user-controlled header (`AUTH-220`, `AUTH-223`). |
+| 4 | Cookie security | A `__Host-` cookie: `HttpOnly`; `Secure` outside an explicitly permitted loopback-only `local` environment; `SameSite=Lax` unless a later accepted decision changes it; `Path=/`; no `Domain` attribute. The opaque token needs no signed-cookie secret because the server validates its high-entropy hash; no signing secret is introduced without review. |
+| 5 | CSRF and origin protection | Every state-changing authenticated seller route requires canonical `Origin`/`Referer` validation and the per-session anti-forgery value (`SEC-310`, `SEC-311`). If any anti-forgery secret is ever stored, only its hash is persisted. Failures are fixed, generic responses that expose no validation detail (`AUTH-215`). |
+| 6 | Mandatory pre-route gates | Before any sign-in route is considered complete: the `AUTH-203` timing-distribution test implemented and passing; `AUTH-204` per-account and per-client progressive delay and rate limiting implemented; trusted-proxy behaviour defined; client identifiers not spoofable through untrusted forwarding headers; client identifiers hashed before audit storage (`SEC-043`, `AUTH-217`); concurrent session rotation and revocation tested; transaction rollback and pooled-connection context reset tested; the log-corpus and database scans (`OPS-571`, `OPS-790`) extended to authentication secrets. |
+| 7 | Product boundaries | No open registration during the private alpha (D-18). Only founder-controlled synthetic accounts are provisioned initially. Password-reset and email-verification delivery stay unbound until the notification-provider decision (`Q-11`) is resolved. No social login, no second factor (`AUTH-213` stays a GA requirement) and no buyer authentication (`D-03`, `AUTH-216`). Hosting (`Q-09`), email and notification-provider (`Q-11`) decisions are not resolved by this entry. |
+| 8 | Spike retention | `spikes/authentication/` is not deleted because this entry is Accepted. It is retained as reproducible evidence until production authentication implements and passes equivalent or stronger tests. It is deleted only in or after the production implementation commit that proves that parity, with the deletion clearly reported, and its history stays in Git. This supersedes the "disposable, delete on acceptance" wording above and in the spike's README at the evidence commit. |
+
+**Still open after this entry.** `Q-09` hosting and hostname, `Q-10` model provider, `Q-11`
+notification providers and therefore reset and verification delivery; social login is not a
+requirement; `AUTH-213` second factor remains a GA requirement; buyer authentication does not
+exist by design. D-17 and D-18 are unchanged. Slice 0 remains deferred, incomplete and
+unpassed (D-18).
+
+**First production task authorised by this entry.** The seller-authentication foundation
+of Slice 1, behind non-public access on synthetic accounts: the forward-only `auth` schema
+migration; the Identity & Auth module carrying the spike's password, token, cookie, CSRF and
+session service behind its `index.ts`; the seller route tree's sign-in, sign-out,
+sign-out-all, rotation and session-list routes with deny-by-default authorization
+declarations (`AUTH-222`) and the origin hook; founder-controlled synthetic account
+provisioning; the six audit event types added to the §12 catalogue, the TypeScript list and
+the database enum; and every gate in condition 6 implemented and passing in the same change.
+Nothing in condition 7 is part of it.

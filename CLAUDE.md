@@ -65,8 +65,18 @@ judgment.
   PostgreSQL with Kysely, pg-boss under the operating rule in
   `docs/engineering/OPERATIONS.md` §2.1, React with Vite for the seller dashboard, and
   server-rendered buyer pages. Do not assume anything beyond it. Hosting, model
-  provider, notification providers and the authentication library remain undecided;
-  raise each as a decision.
+  provider and notification providers remain undecided; raise each as a decision.
+- The approved seller-authentication baseline is `docs/decisions/DECISION_LOG.md`
+  D-19 (Accepted 2026-09-04): a narrow first-party Identity & Auth module on Node.js
+  `crypto.argon2` (Argon2id), `@fastify/cookie`, PostgreSQL/Kysely-owned accounts and
+  opaque sessions stored only as SHA-256 hashes, and transaction-scoped seller
+  resolution before the RLS context; no authentication framework, no identity SaaS.
+  Its acceptance conditions are mandatory: the AUTH-203 timing-distribution test, the
+  AUTH-204 progressive-delay limiter and a trusted-proxy policy must pass before any
+  sign-in route is complete. Password-reset and verification delivery stay unbound
+  until the notification-provider decision; no social login, MFA or buyer
+  authentication. `spikes/authentication/` is retained as evidence until production
+  authentication proves parity.
 - Development status is `docs/decisions/DECISION_LOG.md` D-18 (Accepted 2026-09-03):
   Slice 0 validation is deferred, incomplete and unpassed, and private-alpha
   implementation is authorized behind non-public access on synthetic, fictional or

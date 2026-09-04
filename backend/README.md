@@ -27,7 +27,8 @@ The listing-domain foundation and the DRAFT → READY transition:
 | Module boundaries enforced in the build                                                                                                                                                                   | `.dependency-cruiser.cjs`                                             | `ARCH` §3, `OPS-702`                           |
 | Fastify `web` skeleton: `/health`, empty seller and buyer route trees, loopback bind                                                                                                                      | `src/web/`                                                            | `ARCH-002`, `AUTH-222`, D-18                   |
 
-Not here, by design: authentication (Q-12 stays open), sign-up, any frontend, images,
+Not here, by design: authentication (the approach is D-19, Accepted 2026-09-04, and not yet
+implemented; implementation is bound by D-19's acceptance conditions), sign-up, any frontend, images,
 enhancement, AI, buyer sessions, conversations, offers, notifications, analytics, pg-boss jobs,
 public buyer routes, deployment.
 

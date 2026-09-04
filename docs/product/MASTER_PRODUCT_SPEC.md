@@ -309,8 +309,8 @@ and highest-risk.**
 
 `Q-01` ~~Technology stack — undecided (D-08).~~ **RESOLVED** by decision D-17
 (Accepted 2026-09-03; supersedes D-08), the approved backend architecture baseline.
-Hosting provider, model provider, notification providers and the authentication library
-remain open; see `Q-09` to `Q-12`.
+Hosting provider, model provider and notification providers remain open; see `Q-09` to
+`Q-11`. The authentication library is resolved by D-19; see `Q-12`.
 `Q-02` ~~Final buyer URL shape — Option C recommended; see `product/BUYER_ACCESS_FLOW.md`.~~
 **RESOLVED** by decision D-02: Option C is accepted and is the default (`BUYER-001`);
 Options A and B remain fallbacks. The Slice 0 stop branch in `planning/MVP_ROADMAP.md`
@@ -330,7 +330,12 @@ provider-specific cost model first.
 `Q-10` Model provider — undecided. D-17 keeps it behind the provider interface; the
 contractual position is `security/DATA_AND_PRIVACY.md` §8 and `INT-107`.
 `Q-11` Email, push and other seller-notification providers — undecided (D-17).
-`Q-12` Authentication library — a separate security-reviewed implementation decision or
-spike (D-17). Whatever is chosen must satisfy `AUTH-200` to `AUTH-219`. **Open.** A Proposed
-answer is recorded as `decisions/DECISION_LOG.md` D-19 (2026-09-04): first-party focused
-primitives, evidenced by `spikes/authentication/`. `Q-12` closes only when D-19 is Accepted.
+`Q-12` ~~Authentication library — a separate security-reviewed implementation decision or
+spike (D-17).~~ **RESOLVED** by decision D-19 (Accepted 2026-09-04): a narrow first-party
+Identity & Auth module on Node.js `crypto.argon2` (Argon2id), `@fastify/cookie`,
+PostgreSQL/Kysely-owned accounts and opaque sessions stored only as hashes, and
+transaction-scoped seller resolution; no authentication framework, no identity SaaS. It must
+satisfy `AUTH-200` to `AUTH-219` under the D-19 acceptance conditions; the timing-distribution
+test, the progressive-delay limiter and a trusted-proxy policy are mandatory production work.
+Password-reset and verification delivery wait on `Q-11`; social login, a second factor and
+buyer authentication are not added. Evidence: `spikes/authentication/`.

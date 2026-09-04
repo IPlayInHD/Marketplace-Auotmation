@@ -420,7 +420,7 @@ prose is a summary of them.
 
 | ID | Question | Where it bites |
 |---|---|---|
-| `Q-01` | Technology stack — backend baseline recorded in D-17 (Accepted 2026-09-03) | The concrete form of `OPS-701` to `OPS-717` and the mechanism behind `SEC-100` (PostgreSQL row-level security) follow D-17. Hosting (`Q-09`), model provider (`Q-10`), notification providers (`Q-11`) and the authentication library (`Q-12`) remain open |
+| `Q-01` | Technology stack — backend baseline recorded in D-17 (Accepted 2026-09-03) | The concrete form of `OPS-701` to `OPS-717` and the mechanism behind `SEC-100` (PostgreSQL row-level security) follow D-17. Hosting (`Q-09`), model provider (`Q-10`), notification providers (`Q-11`) remain open; the authentication library (`Q-12`) is resolved by D-19 (Accepted 2026-09-04) |
 | `Q-03` | Whether the access code is pre-filled from the URL | Changes the abuse-control assumptions behind `SEC-134` |
 | `Q-04` | Cross-device buyer session resume | Would add requirements under `SEC-110` to `SEC-119`; any mechanism must not become a bearer credential (`BUYER-016`) |
 | `Q-05` | Whether any buyer-facing email is ever sent | Blocks `SEC-136` and `INT-102` from changing |
@@ -429,5 +429,5 @@ prose is a summary of them.
 | `Q-09` | Hosting provider and region | Fixes the concrete form of `OPS-717`, `OPS-772`, `SEC-333` and `SEC-350`, and the region recorded under `DATA-324` |
 | `Q-10` | Model provider | Fixes `INT-105` and `INT-107`, and the rates behind `business/UNIT_ECONOMICS.md` |
 | `Q-11` | Seller-notification providers | Fixes the delivery side of `INT-102` and `INT-108` |
-| `Q-12` | Authentication library — **open**; a Proposed answer exists in `decisions/DECISION_LOG.md` D-19 (2026-09-04), not yet Accepted | A security-reviewed implementation decision or spike (D-17). Must satisfy `AUTH-200` to `AUTH-219`. D-19 proposes first-party focused primitives (Argon2id from `node:crypto`, hashed opaque sessions, `@fastify/cookie`) with evidence in `spikes/authentication/`; seller authentication is not implemented until D-19 is Accepted |
+| `Q-12` | Authentication library — **RESOLVED** by `decisions/DECISION_LOG.md` D-19 (Accepted 2026-09-04): a narrow first-party Identity & Auth module on Node.js `crypto.argon2` (Argon2id), `@fastify/cookie`, PostgreSQL/Kysely-owned accounts and opaque sessions stored only as SHA-256 hashes, and transaction-scoped seller resolution before the RLS context; no authentication framework, no identity SaaS | `AUTH-200` to `AUTH-219` are implemented under the D-19 acceptance conditions. The `AUTH-203` timing-distribution test, the `AUTH-204` progressive-delay limiter and a trusted-proxy policy are mandatory before any sign-in route is complete. Reset and verification delivery wait on `Q-11`; `AUTH-213` stays GA; no buyer authentication exists |
 | `Q-AG-02` | Default turn and cost budget per conversation (`G-13`) | Fixes the thresholds behind `AI-216` |
