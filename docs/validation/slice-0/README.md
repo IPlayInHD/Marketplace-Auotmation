@@ -192,8 +192,12 @@ additional. Neither replaces the other.
 Recorded, with a recommended default for this run. **A default is not an accepted
 product decision**, and none of the product's open questions is resolved by it: launch
 jurisdiction (`Q-07`), hosting (`Q-09`), model provider (`Q-10`), notification providers
-(`Q-11`), authentication library (`Q-12`), buyer email collection (`Q-05`), cross-device
-continuation (`Q-04`) and buyer-code pre-filling (`Q-03`) all stay open.
+(`Q-11`), buyer email collection (`Q-05`), cross-device continuation (`Q-04`) and
+buyer-code pre-filling (`Q-03`) all stay open. The authentication library (`Q-12`) is no
+longer open: it is resolved by Accepted decision D-19 (2026-09-04), the approved
+seller-authentication approach; production authentication is not yet implemented and D-19's
+mandatory pre-route security conditions still apply. Nothing in D-19 changes this kit or the
+status above: Slice 0 remains deferred, incomplete and unpassed (D-18).
 
 | ID | Question | Why it matters | Recommended default for this run |
 |---|---|---|---|

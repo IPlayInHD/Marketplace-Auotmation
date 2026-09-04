@@ -160,7 +160,11 @@ anything else either founder believes weakened the evidence.
 ## 10. Open validation-design questions and product questions touched
 
 List every OVQ default used in this run and state that none is a product decision. State
-that `Q-03`, `Q-04`, `Q-05`, `Q-07`, `Q-09`, `Q-10`, `Q-11` and `Q-12` remain open. If the
+that `Q-03`, `Q-04`, `Q-05`, `Q-07`, `Q-09`, `Q-10` and `Q-11` remain open, and that `Q-12` is
+resolved by Accepted decision D-19 (2026-09-04), the approved seller-authentication approach;
+production authentication is not yet implemented and D-19's mandatory pre-route security
+conditions still apply. This memo does not change that Slice 0 remains deferred, incomplete
+and unpassed until a PASS is recorded here (D-18). If the
 evidence bears on D-02 (page-open below 20% or code-entry below 50%), say that D-02 is
 to be reopened with this evidence, not decided here.
 
