@@ -58,7 +58,7 @@ export {
 } from './client-identity.ts';
 export {
   THROTTLE_POLICY,
-  delayAfterAttempts,
+  delayAfterFailures,
   type ThrottlePolicy,
   type ThrottleScopePolicy,
 } from './throttle.ts';

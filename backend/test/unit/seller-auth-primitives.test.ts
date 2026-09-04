@@ -314,11 +314,11 @@ describe('Trusted-proxy policy and client identifiers (D-19 condition 6, SEC-043
 describe('Progressive delay policy (AUTH-204)', () => {
   it('is free up to the allowance, then doubles from the base to the cap', () => {
     const a = auth.THROTTLE_POLICY.account;
-    expect([1, 2, 3, 4, 5, 6, 7, 8, 9, 50].map((n) => auth.delayAfterAttempts(a, n))).toEqual([
+    expect([1, 2, 3, 4, 5, 6, 7, 8, 9, 50].map((n) => auth.delayAfterFailures(a, n))).toEqual([
       0, 0, 0, 2, 4, 8, 16, 32, 60, 60,
     ]);
     const c = auth.THROTTLE_POLICY.client;
-    expect([10, 11, 12, 19, 20, 100].map((n) => auth.delayAfterAttempts(c, n))).toEqual([
+    expect([10, 11, 12, 19, 20, 100].map((n) => auth.delayAfterFailures(c, n))).toEqual([
       0, 2, 4, 512, 900, 900,
     ]);
     expect(a.capSeconds).toBeLessThanOrEqual(60);

@@ -11,12 +11,13 @@ import { generateSessionToken, hashSessionToken, isWellFormedToken } from './ses
 import { THROTTLE_POLICY, type ThrottlePolicy, type ThrottleScopePolicy } from './throttle.ts';
 
 // Module 1 — Identity & Auth (ARCH §3, D-19). Every database access goes through the keyhole
-// functions of migration 0007: the runtime role holds no table privilege in schema auth.
+// functions of migrations 0007 and 0008: the runtime role holds no table privilege in schema auth.
 //
-// Sign-in (AUTH-203, AUTH-204): reserve an attempt per client and per account under a row lock,
+// Sign-in (AUTH-203, AUTH-204): reserve capacity per client and per account under a row lock,
 // look up at most one verifier, run exactly one Argon2id derivation (against the decoy when no
-// account exists), then record the outcome. Both failure paths do the same database work and
-// answer the same fixed result.
+// account exists), then finalize both reservations by the outcome in the transaction that records
+// it (migration 0008): only a completed failure counts, a success counts nowhere and clears the
+// account's failures. Both failure paths do the same database work and answer the same result.
 //
 // withSellerSession (SEC-101, D-19 condition 3): the single site where a presented session
 // becomes a tenant. Resolution, expiry, revocation and set_config happen in one transaction that
@@ -87,7 +88,8 @@ interface LookupRow {
 interface ReserveRow {
   allowed: boolean;
   retry_after_seconds: number;
-  attempts: number;
+  failures: number;
+  pending: number;
 }
 interface SessionRow {
   id: string;
@@ -106,21 +108,37 @@ interface ListedRow {
   absolute_expires_at: Date;
 }
 
+type ThrottleScope = 'account' | 'client';
+
+/** Admits or refuses an attempt before any credential work; an admitted attempt is in flight. */
 async function reserve(
   trx: TenantTransaction,
-  scope: 'account' | 'client',
+  scope: ThrottleScope,
   subjectHash: string,
   policy: ThrottleScopePolicy,
 ): Promise<ReserveRow> {
   const result = await sql<ReserveRow>`
-    select allowed, retry_after_seconds, attempts
+    select allowed, retry_after_seconds, failures, pending
       from auth.reserve_sign_in_attempt(${scope}::auth.throttle_scope, ${subjectHash},
-        ${policy.freeAttempts}::integer, ${policy.baseSeconds}::integer, ${policy.capSeconds}::integer, ${policy.decaySeconds}::integer)`.execute(
-    trx,
-  );
+        ${policy.freeFailures}::integer, ${policy.baseSeconds}::integer, ${policy.capSeconds}::integer,
+        ${policy.decaySeconds}::integer, ${policy.reservationSeconds}::integer)`.execute(trx);
   const row = result.rows[0];
   if (!row) throw new Error('throttle keyhole returned no row');
   return row;
+}
+
+/** Settles a reservation by its outcome: `failed` counts one failure, otherwise none. */
+async function finalize(
+  trx: TenantTransaction,
+  scope: ThrottleScope,
+  subjectHash: string,
+  failed: boolean,
+  policy: ThrottleScopePolicy,
+): Promise<void> {
+  await sql`
+    select auth.finalize_sign_in_attempt(${scope}::auth.throttle_scope, ${subjectHash}, ${failed}::boolean,
+      ${policy.freeFailures}::integer, ${policy.baseSeconds}::integer, ${policy.capSeconds}::integer,
+      ${policy.decaySeconds}::integer)`.execute(trx);
 }
 
 async function recordSignInEvent(
@@ -169,31 +187,34 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
       }
       const accountSubject = hashAccountIdentifier(emailNormalized, key);
 
-      // 1. Reserve the attempt (client first, so a throttled client never touches the account).
+      // 1. Reserve capacity (client first, so a throttled client never touches the account). A
+      // refusal is recorded in the same transaction; a client reservation whose account is
+      // refused is released without a failure, since no credential was checked.
       const reservation = await db.transaction().execute(async (trx) => {
+        const refuse = async (scope: ThrottleScope, retryAfterSeconds: number) => {
+          await recordSignInEvent(
+            trx,
+            'SELLER_SIGN_IN_THROTTLED',
+            accountSubject,
+            input.client,
+            input.requestId,
+            {
+              scope,
+              retry_after_seconds: retryAfterSeconds,
+            },
+          );
+          return { allowed: false as const, retryAfterSeconds };
+        };
         const client = await reserve(trx, 'client', input.client.hash, throttle.client);
-        if (!client.allowed)
-          return {
-            allowed: false as const,
-            retryAfterSeconds: client.retry_after_seconds,
-            scope: 'client' as const,
-          };
+        if (!client.allowed) return refuse('client', client.retry_after_seconds);
         const account = await reserve(trx, 'account', accountSubject, throttle.account);
-        if (!account.allowed)
-          return {
-            allowed: false as const,
-            retryAfterSeconds: account.retry_after_seconds,
-            scope: 'account' as const,
-          };
+        if (!account.allowed) {
+          await finalize(trx, 'client', input.client.hash, false, throttle.client);
+          return refuse('account', account.retry_after_seconds);
+        }
         return { allowed: true as const };
       });
       if (!reservation.allowed) {
-        await db.transaction().execute((trx) =>
-          recordSignInEvent(trx, 'SELLER_SIGN_IN_THROTTLED', accountSubject, input.client, input.requestId, {
-            scope: reservation.scope,
-            retry_after_seconds: reservation.retryAfterSeconds,
-          }),
-        );
         return { ok: false, reason: 'throttled', retryAfterSeconds: reservation.retryAfterSeconds };
       }
 
@@ -205,25 +226,28 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
         ? await passwords.verify(account.password_hash, input.password)
         : await passwords.verifyAgainstDecoy(input.password);
 
-      // 3. Record the outcome in one transaction each.
+      // 3. Finalize both reservations by the outcome, in the transaction that records it. Both
+      // failure paths finalize identically; a success is a failure nowhere.
       if (!account || !verified) {
-        await db
-          .transaction()
-          .execute((trx) =>
-            recordSignInEvent(
-              trx,
-              'SELLER_SIGN_IN_FAILED',
-              accountSubject,
-              input.client,
-              input.requestId,
-              {},
-            ),
+        await db.transaction().execute(async (trx) => {
+          await finalize(trx, 'client', input.client.hash, true, throttle.client);
+          await finalize(trx, 'account', accountSubject, true, throttle.account);
+          await recordSignInEvent(
+            trx,
+            'SELLER_SIGN_IN_FAILED',
+            accountSubject,
+            input.client,
+            input.requestId,
+            {},
           );
+        });
         return { ok: false, reason: 'invalid_credentials' };
       }
       const token = generateSessionToken();
       const tokenHash = hashSessionToken(token);
       const principal = await db.transaction().execute(async (trx) => {
+        await finalize(trx, 'client', input.client.hash, false, throttle.client);
+        await finalize(trx, 'account', accountSubject, false, throttle.account);
         const created = await sql<SessionRow>`
           select id, absolute_expires_at from auth.create_session(${account.account_id}::uuid, ${tokenHash},
             ${input.client.hash}, ${input.client.keyVersion}::smallint, ${config.sessionAbsoluteSeconds}::integer)`.execute(
@@ -231,7 +255,6 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
         );
         const session = created.rows[0];
         if (!session) throw new Error('session keyhole returned no row');
-        await sql`select auth.record_sign_in_success(${accountSubject})`.execute(trx);
         // The seller is proven; the tenant context follows the proof, never the request.
         await establishTenantContext(trx, account.seller_id);
         await audit.appendAuditEvent(trx, account.seller_id, {

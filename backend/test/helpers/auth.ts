@@ -18,8 +18,20 @@ export const AUTH_PREFIX = `${ROUTE_PREFIXES.seller}/auth`;
 
 /** Effectively unlimited: for suites that are not about throttling. */
 export const RELAXED_THROTTLE: auth.ThrottlePolicy = {
-  account: { freeAttempts: 1_000_000, baseSeconds: 1, capSeconds: 1, decaySeconds: 3600 },
-  client: { freeAttempts: 1_000_000, baseSeconds: 1, capSeconds: 1, decaySeconds: 3600 },
+  account: {
+    freeFailures: 1_000_000,
+    baseSeconds: 1,
+    capSeconds: 1,
+    decaySeconds: 3600,
+    reservationSeconds: 60,
+  },
+  client: {
+    freeFailures: 1_000_000,
+    baseSeconds: 1,
+    capSeconds: 1,
+    decaySeconds: 3600,
+    reservationSeconds: 60,
+  },
 };
 
 export function testAuthConfig(overrides: Partial<AuthConfig> = {}): AuthConfig {

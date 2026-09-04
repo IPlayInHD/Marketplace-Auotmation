@@ -30,6 +30,7 @@ describe('Migrations', () => {
       '0005_listed_lifecycle.sql',
       '0006_relist_content_and_code_expiry.sql',
       '0007_seller_authentication.sql',
+      '0008_sign_in_failure_throttle.sql',
     ]);
     expect(first.alreadyApplied).toEqual([]);
 
@@ -50,6 +51,7 @@ describe('Migrations', () => {
       '0005_listed_lifecycle.sql',
       '0006_relist_content_and_code_expiry.sql',
       '0007_seller_authentication.sql',
+      '0008_sign_in_failure_throttle.sql',
     ]);
   });
 
@@ -199,10 +201,12 @@ describe('Migrations', () => {
       secdef: boolean;
       config: string[] | null;
       executable: boolean;
+      public_executable: boolean;
     }>(
       env.superuserUrl,
       `SELECT p.proname AS name, p.prosecdef AS secdef, p.proconfig AS config,
-              has_function_privilege($1, p.oid, 'EXECUTE') AS executable
+              has_function_privilege($1, p.oid, 'EXECUTE') AS executable,
+              has_function_privilege('public', p.oid, 'EXECUTE') AS public_executable
          FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
         WHERE n.nspname = 'auth' AND p.prokind = 'f' ORDER BY 1`,
       [ROLES.runtime],
@@ -210,9 +214,9 @@ describe('Migrations', () => {
     const keyholes = functions.filter((f) => !f.name.endsWith('_guard'));
     expect(keyholes.map((f) => f.name)).toEqual([
       'create_session',
+      'finalize_sign_in_attempt',
       'list_account_sessions',
       'record_sign_in_event',
-      'record_sign_in_success',
       'reserve_sign_in_attempt',
       'resolve_session',
       'revoke_account_sessions',
@@ -220,18 +224,31 @@ describe('Migrations', () => {
       'rotate_session',
       'sign_in_lookup',
     ]);
+    // One signature per keyhole: migration 0008 dropped the ones it replaced instead of overloading.
+    expect(functions.map((f) => f.name)).toEqual([...new Set(functions.map((f) => f.name))]);
     for (const f of keyholes) {
       expect(f.secdef, `${f.name} SECURITY DEFINER`).toBe(true);
       expect(f.config?.join(' '), `${f.name} search_path`).toContain('search_path=pg_catalog, auth, app');
       expect(f.executable, `${f.name} EXECUTE`).toBe(true);
+      expect(f.public_executable, `${f.name} PUBLIC EXECUTE`).toBe(false);
     }
     for (const f of functions.filter((f) => f.name.endsWith('_guard')))
       expect(f.executable, f.name).toBe(false);
-    const [publicExec] = await query<{ allowed: boolean }>(
+    // The throttle row after migration 0008: failures and in-flight reservations, never attempts.
+    const throttleColumns = await query<{ column_name: string }>(
       env.superuserUrl,
-      `SELECT has_function_privilege('public', 'auth.sign_in_lookup(text)', 'EXECUTE') AS allowed`,
+      `SELECT column_name FROM information_schema.columns WHERE table_schema = 'auth' AND table_name = 'sign_in_throttle' ORDER BY 1`,
     );
-    expect(publicExec?.allowed).toBe(false);
+    expect(throttleColumns.map((c) => c.column_name)).toEqual([
+      'failures',
+      'last_failure_at',
+      'last_reserved_at',
+      'locked_until',
+      'pending',
+      'scope',
+      'subject_hash',
+      'updated_at',
+    ]);
   });
 
   it('keep the migration ledger out of the runtime role’s reach', async () => {
