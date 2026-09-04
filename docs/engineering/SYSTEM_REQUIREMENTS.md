@@ -429,5 +429,5 @@ prose is a summary of them.
 | `Q-09` | Hosting provider and region | Fixes the concrete form of `OPS-717`, `OPS-772`, `SEC-333` and `SEC-350`, and the region recorded under `DATA-324` |
 | `Q-10` | Model provider | Fixes `INT-105` and `INT-107`, and the rates behind `business/UNIT_ECONOMICS.md` |
 | `Q-11` | Seller-notification providers | Fixes the delivery side of `INT-102` and `INT-108` |
-| `Q-12` | Authentication library | A security-reviewed implementation decision or spike (D-17). Must satisfy `AUTH-200` to `AUTH-219` |
+| `Q-12` | Authentication library — **open**; a Proposed answer exists in `decisions/DECISION_LOG.md` D-19 (2026-09-04), not yet Accepted | A security-reviewed implementation decision or spike (D-17). Must satisfy `AUTH-200` to `AUTH-219`. D-19 proposes first-party focused primitives (Argon2id from `node:crypto`, hashed opaque sessions, `@fastify/cookie`) with evidence in `spikes/authentication/`; seller authentication is not implemented until D-19 is Accepted |
 | `Q-AG-02` | Default turn and cost budget per conversation (`G-13`) | Fixes the thresholds behind `AI-216` |

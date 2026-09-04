@@ -331,4 +331,6 @@ provider-specific cost model first.
 contractual position is `security/DATA_AND_PRIVACY.md` §8 and `INT-107`.
 `Q-11` Email, push and other seller-notification providers — undecided (D-17).
 `Q-12` Authentication library — a separate security-reviewed implementation decision or
-spike (D-17). Whatever is chosen must satisfy `AUTH-200` to `AUTH-219`.
+spike (D-17). Whatever is chosen must satisfy `AUTH-200` to `AUTH-219`. **Open.** A Proposed
+answer is recorded as `decisions/DECISION_LOG.md` D-19 (2026-09-04): first-party focused
+primitives, evidenced by `spikes/authentication/`. `Q-12` closes only when D-19 is Accepted.

@@ -491,3 +491,109 @@ rule 3).
 on `ASM-01` to `ASM-05`, for example a founder-controlled listing removed by a
 marketplace or an internal demonstration in which the code gate is not understood. Any
 proposal to expose a surface to a non-founder. Any resolution of `Q-07`.
+
+---
+
+## D-19 — Seller authentication approach
+**Date** 2026-09-04 · **Status** Proposed · **Resolves, if accepted** `Q-12` · **Depends on** D-17 (Accepted), D-18 (Accepted)
+
+**Proposal.** Seller authentication is built as a first-party Identity & Auth module
+(`architecture/ARCHITECTURE.md` §3 module 1) from focused, maintained primitives already in
+the D-17 baseline, not from an authentication framework. Production implementation remains
+**unauthorized** until this entry is Accepted; `Q-12` stays open until then.
+
+| Concern | Proposed mechanism | Exact evaluated version |
+|---|---|---|
+| Password verifiers (`AUTH-201`) | Argon2id from `node:crypto` (`crypto.argon2`, added in Node.js v24.7.0; the Node.js v24.19.0 changelog records "doc,crypto: mark argon2 and encap/decap as stable"), parameters `m=19456` KiB, `t=2`, `p=1`, 32-byte tag, 16-byte CSPRNG salt, encoded as a PHC string so a verifier is portable to any Argon2 implementation | Node.js 24.20.0, OpenSSL 3.5.7 (`process.versions.openssl`) |
+| Session tokens (`AUTH-205`, `OPS-712`) | 32 CSPRNG bytes as base64url; PostgreSQL stores the SHA-256 only; idle and absolute lifetimes decided by the database clock (`AUTH-207`, `OPS-741`); rotation, single revocation and revoke-all are single transactions (`AUTH-206`, `AUTH-219`) | `node:crypto`, Kysely 0.29.5, pg 8.23.0 |
+| Cookie | `@fastify/cookie`: `__Host-seller_session`, `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, host-only; `http` on loopback in `local` only; no cookie signing and therefore no cookie secret | `@fastify/cookie` 11.1.2 (MIT; dependencies `cookie`, `fastify-plugin`; compatible with Fastify 5 per its README table) |
+| CSRF (`SEC-310`, `SEC-311`) | `Origin`, else `Referer`, must equal the seller origin; `Sec-Fetch-Site` other than `same-origin` refuses; absence refuses. Per-session anti-forgery value = HMAC-SHA256 keyed by the session token, sent in a request header; nothing stored, no server secret | first-party |
+| Tenant context (`SEC-100`, `SEC-101`) | `withSellerSession`: one transaction resolves the session by hash, calls `set_config('app.seller_id', …, true)`, then runs the work. No live session, no context; nothing survives the transaction | the existing `withTenant` mechanism of `backend/src/db/kysely.ts` |
+| Storage | A dedicated `auth` schema (`seller_account`, `seller_session`) owned by the migration role, `SELECT, INSERT, UPDATE` only for the runtime role, no `DELETE`; a forward-only migration in the existing ledger (`OPS-714`, `OPS-716`) | shape evaluated in the spike; the production migration is not written |
+| Rate limiting (`AUTH-204`) | An interface consulted per hashed account key and per hashed client identifier before any key derivation; refusal answers a neutral response (`SEC-011`). The progressive-delay policy is production work | interface only |
+| Audit (`AUTH-217`, `OPS-783`, `OPS-787`) | Six event types proposed for `ai/POLICY_AND_AUTHORIZATION.md` §12 — `SELLER_SIGN_IN_SUCCEEDED`, `SELLER_SIGN_IN_FAILED`, `SELLER_SIGN_IN_THROTTLED`, `SELLER_SESSION_ROTATED`, `SELLER_SIGNED_OUT`, `SELLER_SESSIONS_REVOKED` — written in the same transaction through module 19, carrying identifiers and a hashed client identifier only | first-party |
+| Fallback for Argon2id | If the deployed runtime lacks `crypto.argon2`, `@node-rs/argon2` 2.2.0 (MIT, no install script, platform binaries as `optionalDependencies`, PHC output, defaults `m=19456,t=2,p=1`) behind the same `PasswordVerifier` interface. Not installed now | registry metadata read 2026-09-04 |
+
+**Why it fits the canonical architecture.** Every primitive is in the D-17 baseline; the only
+new production dependency is `@fastify/cookie` (two transitive packages). Migrations stay in
+the forward-only ledger with the existing role separation; tenant resolution uses the existing
+transaction-scoped `set_config` mechanism rather than a second lookup; no third-party identity
+service, no telemetry, no hosting cost; module 1 knows nothing about listings; the seller and
+buyer route trees remain separate (`ARCH-002`); the tests are deterministic Testcontainers
+runs in the same shape as `backend/`. No secret is required for sessions or CSRF, so there is
+no session-signing key to manage or leak.
+
+**Requirements satisfied directly by the spike.** `AUTH-201`, `AUTH-202`, `AUTH-205`,
+`AUTH-206`, `AUTH-207`, `AUTH-215`, `AUTH-219`, `AUTH-220`, `AUTH-223`; `AUTH-203` in its
+structural half (byte-identical responses and equal key-derivation work for unknown account
+and wrong password); `AUTH-208` and `AUTH-209` in their primitives (session list, revoke-one,
+revoke-all in one transaction); `AUTH-217` through the proposed events; `SEC-101`, `SEC-310`,
+`SEC-311`, `SEC-043`; `OPS-712`, `OPS-716`, `OPS-729`, `OPS-783`, `OPS-787`, `OPS-567`;
+`SEC-380` to `SEC-383` for the spike's own lockfile.
+
+**Custom code still required before seller authentication ships (production scope if
+accepted).** The production `auth` migration; the Identity & Auth module carrying the spike's
+service behind the module `index.ts` boundary; the seller route tree with deny-by-default
+authorization declarations (`AUTH-222`); the `AUTH-204` progressive-delay limiter (candidate:
+`@fastify/rate-limit` 11.2.0, or a database-backed counter, to be chosen with `Q-09`); the
+`AUTH-203` timing-distribution test; founder-controlled synthetic account creation only (no
+open registration, D-18); password change with revoke-others and notification (`AUTH-209`);
+password reset with single-use hashed tokens (`AUTH-210`); the `AUTH-212` cross-presentation
+matrix once buyer sessions exist; the session-retention job (`DATA-100`); the §12 catalogue
+additions; the `OPS-571` log-corpus scan extended to the new forbidden patterns. Deferred with
+an interface, not decided: email delivery for reset and verification and every seller
+notification (`Q-11`, `INT-102`); the production hostname and hosting (`Q-09`, `SEC-333`);
+email change (`AUTH-211`, GA); re-authentication window (`AUTH-214`, GA); second factor
+(`AUTH-213`, GA); social login (not required by any MVP requirement); public buyer
+authentication (none exists by design, `D-03`, `AUTH-216`).
+
+**Rejected alternatives.**
+
+| Candidate | Evaluated | Why not |
+|---|---|---|
+| better-auth | 1.7.2 (MIT), registry and repository read 2026-09-04; Kysely-based core, PostgreSQL through `pg`, Fastify through a Web-Request adapter | (1) The session token is stored in plaintext: the documentation describes the session table field "`token`: The session token. Which is also used as the session cookie", and `createSession` in `packages/better-auth/src/db/internal-adapter.ts` writes `token: generateId(32)` as-is. That fails `AUTH-205` and `OPS-712`, and no supported option hashes it; changing it means replacing internal adapter behaviour, the "extensive custom overrides" weakness. (2) It owns its schema and migrations (`npx auth migrate`, `getMigrations`) outside our forward-only ledger and role separation (`OPS-714`, `OPS-716`). (3) Default password hashing is scrypt; Argon2id needs a custom `password.hash`/`verify` override (documented, so workable). (4) No transaction-scoped tenant resolution: the session is read on its own connection, so `SEC-101` needs a second lookup. (5) 21 transitive packages including adapters for four other ORMs and `@better-auth/telemetry` (off by default). (6) Ten GitHub security advisories published in 2026, mostly in plugins; two in the core package (`GHSA-qq9h-g4jm-xgf3`, high, patched in 1.6.22; `GHSA-86j7-9j95-vpqj`, high, patched in 1.6.13). Maintenance is active and responsive, which is why it was the first candidate; the surface is what disqualifies it |
+| `@fastify/session` + `@fastify/passport` + `passport-local` | 11.1.2, 4.0.2, 1.0.0 | `@fastify/session` (MIT, two dependencies, Fastify organisation) keys its store by the raw session id (`store.set(session.sessionId, …)` in `lib/session.js`) and signs the cookie with a server secret of 32 or more characters, so hashing at rest needs a custom store wrapper and a secret needs managing; the default store leaks memory and a Kysely store must be written. `@fastify/passport` adds serialisation and strategy plumbing but no password hashing, CSRF or tenant resolution. `passport-local` 1.0.0 was published on 2014-03-08 and has had no release since (registry `time`). The chain would replace about sixty lines of the spike with three packages and a secret, while still requiring all the custom code |
+| Lucia | 3.2.2 | Deprecated on the registry ("This package has been deprecated"); excluded, not evaluated as a serious candidate |
+| Auth.js (`@auth/core` 0.41.3) | — | No Fastify package exists on the registry (`@auth/fastify` returns 404); credentials flows are secondary to OAuth in its design; excluded |
+| `@fastify/secure-session` 8.3.0 | — | Stateless encrypted-cookie sessions (`sodium-native` native dependency); server-side expiry and revocation (`AUTH-207`, `AUTH-219`) are not representable; D-17 already rejects stateless sessions |
+| `argon2` (node-argon2) 0.45.1 | — | Sound and maintained, but carries an `install` script (`node-gyp-build`) and a native addon where the runtime already provides Argon2id; superseded by `crypto.argon2`, with `@node-rs/argon2` as the script-free fallback |
+| Third-party identity SaaS | — | Excluded by the evaluation brief (no mandatory identity SaaS) and by D-17's rejection of hosted-identity tokens used as sessions |
+
+**Security boundaries.** The `auth` schema is the only read that happens before tenant
+context exists, and it is reachable by the runtime role with DML only. A token exists in
+plaintext only in the browser's cookie jar and in the memory of the request that presents it;
+a password only in the sign-in request. Nothing in the cookie is data. The seller origin is
+configuration (`Q-09`), never hard-coded. Failure responses are fixed strings (`AUTH-215`).
+The audit summary guard and the logger redaction list of `backend/` apply unchanged.
+
+**Upgrade policy.** The Node.js line stays pinned by `backend/.node-version` and, once hosting
+exists, by image digest (`SEC-385`); `crypto.argon2` requires a Node.js build with OpenSSL 3.2
+or later, which the official 24.x binaries carry. Every verifier records its own parameters,
+and `needsRehash` re-derives on the next successful sign-in when the policy changes, so a
+parameter change is a configuration change. `@fastify/cookie` follows Fastify majors per its
+compatibility table. Any new dependency is reviewed by the second founder (`SEC-381`) and
+scanned in CI (`SEC-382`).
+
+**Reconsideration triggers.** `crypto.argon2` is absent from the deployed runtime (use the
+fallback and record it); an unpatched advisory against `@fastify/cookie` or Fastify; a
+requirement for federation, single sign-on, organisation accounts or passkeys beyond a
+first-party TOTP second factor (`AUTH-213`), at which point a framework is re-evaluated; a
+second seller-facing application needing shared sessions; the `AUTH-203` timing-distribution
+test failing against the first-party implementation.
+
+**Evidence.** `spikes/authentication/` (a disposable spike, not product code; its README
+carries the procedure and the claim table): 23 tests in 3 files passing twice with shuffled
+order and once more after `npm ci --ignore-scripts` from the committed lockfile; the Argon2
+reference implementation's known-answer vectors (`P-H-C/phc-winner-argon2` `src/test.c`)
+reproduced raw and PHC-encoded; sign-in, generic failure, cookie attributes, hash-only
+storage, server-side expiry, rotation, revocation, revoke-all, origin and anti-forgery
+refusal, tenant resolution under the production migrations 0001 to 0006 with row-level
+security, denial without a session, and a corpus scan of rows, audit events, logs and error
+bodies for every secret the suite produced; `npm audit` with no findings; 73 production
+packages, all MIT, BSD-3-Clause or ISC, none deprecated, none with an install script or a
+native addon.
+
+**Not decided here.** Password-reset and verification delivery, notification providers
+(`Q-11`), hosting and hostname (`Q-09`), social login, second factor, buyer authentication.
+Accepting this entry authorises the production implementation scope above and nothing else;
+D-18's private-alpha boundaries apply unchanged.
