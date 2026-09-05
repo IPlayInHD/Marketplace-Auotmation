@@ -9,16 +9,17 @@ import type { RouteDeclaration } from '../authorization.ts';
 import { provenToken, requiredIdempotencyKey } from './seller-request.ts';
 
 // The authenticated seller listing surface: Slice 1e (create a listing, read it, set its asking
-// price) and Slice 1f under D-21 (replace its seller-provided facts, save a seller-authored draft,
-// and read the workspace those two produce). Creation is the seller's one action of LIST-100 AC1,
+// price), Slice 1f under D-21 (replace its seller-provided facts, save a seller-authored draft,
+// and read the workspace those two produce) and Slice 1g (approve one seller draft as the single
+// approved version, LIST-105 and LIST-108). Creation is the seller's one action of LIST-100 AC1,
 // the composite command `listing.create_with_item` that creates the inventory item and its DRAFT
 // listing in one transaction under one receipt; every other mutation is the HTTP form of one
 // domain command each, and none of the routes changes a command's semantics. Identity comes from
 // the session only (AUTH-220): every handler runs its command inside withSellerSession, the single
 // route-to-tenant construction site, under forced row-level security. Another tenant's listing is
 // exactly as absent as one that does not exist (AUTH-221). Nothing here lists, searches, deletes,
-// publishes, transitions, uploads, enhances, approves, prices or exposes anything to a buyer, and
-// nothing rewrites a seller's words (LIST-006, D-12).
+// publishes, transitions, uploads, enhances, prices or exposes anything to a buyer, nothing
+// approves on the seller's behalf, and nothing rewrites a seller's words (LIST-006, D-12).
 
 export interface SellerListingRoutesOptions {
   auth: auth.AuthService;
@@ -26,6 +27,14 @@ export interface SellerListingRoutesOptions {
 }
 
 const ListingParams = z.strictObject({ listingId: z.uuid() });
+const ContentVersionParams = z.strictObject({ listingId: z.uuid(), contentVersionId: z.uuid() });
+
+/**
+ * Exactly the domain representation of `listing.approve_content` beyond the two identifiers in
+ * the path: the row version the seller read. The seller submits no words, no facts, no status,
+ * no provenance and no identity; the authenticated request is the approval (LIST-105).
+ */
+const ApproveContentBody = z.strictObject({ expectedRowVersion: z.number().int().min(1) });
 
 /**
  * Exactly the seller-supplied inventory facts the composite creation command accepts (LIST-100
@@ -136,6 +145,31 @@ export function presentDraft(version: content.ContentVersionRecord): SellerDraft
   };
 }
 
+/**
+ * The approved version as the seller reads it back from an approval: identifiers, number, status,
+ * provenance, lineage and the approval time. No words (the workspace carries them) and no approver
+ * identifier (that is the seller id).
+ */
+export interface ApprovedContentVersionView {
+  id: string;
+  versionNumber: number;
+  status: content.ContentVersionRecord['status'];
+  provenance: content.ContentVersionRecord['provenance'];
+  sourceVersionId: string | null;
+  approvedAt: Date | null;
+}
+
+export function presentApprovedVersion(version: content.ContentVersionRecord): ApprovedContentVersionView {
+  return {
+    id: version.id,
+    versionNumber: version.versionNumber,
+    status: version.status,
+    provenance: version.provenance,
+    sourceVersionId: version.sourceVersionId,
+    approvedAt: version.approvedAt,
+  };
+}
+
 /** The canonical AUTH-222 declarations of the listing routes, mirrored in the README inventory. */
 export const SELLER_LISTING_DECLARATIONS = {
   create: {
@@ -210,6 +244,22 @@ export const SELLER_LISTING_DECLARATIONS = {
       'Idempotency-Key required (client UUID); exact replay returns the stored listing and re-reads the exact immutable version it names, never the latest; in DRAFT copy identical to the predecessor is a no-op that still consumes the key; in EXPIRED every valid save creates a version (SM-L-06)',
     audit:
       'LISTING_CONTENT_DRAFTED on change with the new version identifier and number, the predecessor identifier when present and both row versions, never a word of copy, in the same transaction; none for the no-op',
+    failure:
+      '401 unauthenticated; 403 forbidden_origin or forbidden_anti_forgery; 400 bad_request or idempotency_key_required; 404 not_found; 409 invalid_state, stale_row_version or idempotency_conflict',
+  },
+  approveContent: {
+    actor: 'seller',
+    resource: 'listing_content_version',
+    action: 'approve',
+    authentication: 'seller-session',
+    authorization:
+      'the live session names the tenant; the listing and the version must both belong to it, the listing DRAFT or EXPIRED and carrying the expected row version, the version a SELLER_DRAFT of that listing; the authenticated request is the seller’s explicit approval and nothing is approved on their behalf (LIST-105, LIST-108, AUTH-INV-04)',
+    tenantSource: 'session',
+    classification: 'consequential',
+    idempotency:
+      'Idempotency-Key required (client UUID); exact replay returns the stored listing and the stored approval marks of the exact version the receipt names, reading only its immutable words, never the latest version; a version already approved or superseded is refused under a new key',
+    audit:
+      'LISTING_CONTENT_APPROVED with the version number and the superseded version identifier, in the same transaction as the supersession, the approval marks and the listing update; no status event, because approval performs no listing transition',
     failure:
       '401 unauthenticated; 403 forbidden_origin or forbidden_anti_forgery; 400 bad_request or idempotency_key_required; 404 not_found; 409 invalid_state, stale_row_version or idempotency_conflict',
   },
@@ -328,6 +378,38 @@ export function registerSellerListingRoutes(
       return reply
         .code(200)
         .send({ listing: presentListing(result.listing), draft: presentDraft(result.version) });
+    },
+  );
+
+  // POST: the seller's explicit approval of one immutable version (LIST-105, LIST-108). The
+  // version comes from the path and must be a SELLER_DRAFT of this tenant's listing; the domain
+  // supersedes the previous approved version, marks this one approved and advances the listing row
+  // in one transaction, and performs no listing transition, publication or relist.
+  app.post(
+    '/listings/:listingId/content/:contentVersionId/approve',
+    {
+      config: { authorization: 'seller-session', declaration: SELLER_LISTING_DECLARATIONS.approveContent },
+    },
+    async (request, reply) => {
+      const token = provenToken(request, cookieName);
+      const key = requiredIdempotencyKey(request);
+      const params = ContentVersionParams.parse(request.params);
+      const body = ApproveContentBody.parse(request.body);
+      const result = await options.auth.withSellerSession(token, (trx, principal) =>
+        listings.approveContent(
+          trx,
+          commandContext({ sellerId: principal.sellerId, requestId: request.id, idempotencyKey: key }),
+          {
+            listingId: params.listingId,
+            versionId: params.contentVersionId,
+            expectedRowVersion: body.expectedRowVersion,
+          },
+        ),
+      );
+      return reply.code(200).send({
+        listing: presentListing(result.listing),
+        approvedContentVersion: presentApprovedVersion(result.version),
+      });
     },
   );
 }

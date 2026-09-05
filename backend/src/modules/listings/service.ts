@@ -587,12 +587,34 @@ export interface ApproveContentResult {
 }
 
 /**
+ * The approval outcome as a receipt stores it (OPS-731): the listing record and the approved
+ * version's identifiers, number, status, provenance, lineage and approval marks, exactly as they
+ * were when the command ran. The words are not stored; they are immutable (CV001) and are read
+ * back from the exact version the receipt names. The status is stored because a later approval
+ * moves it to SUPERSEDED, and a replay must answer what the original did, not what is current.
+ */
+const StoredApproval = z.object({
+  versionId: z.uuid(),
+  versionNumber: z.number().int().min(1),
+  status: z.literal('APPROVED'),
+  provenance: z.literal('SELLER_APPROVED_COPY'),
+  sourceVersionId: z.uuid().nullable(),
+  createdAt: z.coerce.date(),
+  approvedAt: z.coerce.date(),
+  approvedBy: z.uuid(),
+});
+
+/**
  * LIST-105 / LIST-108: the owning seller approves one content version; any previously approved
  * version is superseded in the same transaction (SM-CT-01, SM-CT-02). Audited as
  * LISTING_CONTENT_APPROVED under the seller's idempotency key. The receipt keeps the listing and
- * the version id; the approved words are immutable (SM-CT-04), so a replay reads them back.
- * Approval is a DRAFT action, and also an EXPIRED one: SM-L-06 and OPS-219 require the seller to
- * approve a new version before relisting, and nothing is approved on the seller's behalf.
+ * the approval marks of the exact version approved; the words are immutable (SM-CT-04) and are
+ * read back from that version on replay, never from the latest one. Approval is a DRAFT action,
+ * and also an EXPIRED one: SM-L-06 and OPS-219 require the seller to approve a new version before
+ * relisting, and nothing is approved on the seller's behalf. Only a SELLER_DRAFT version is
+ * eligible; the listing row is locked and must carry the row version the seller read, checked
+ * before any write. Approval performs no listing transition: DRAFT → READY is markReady, gated
+ * by SM-L-01, which is also where a detail no seller fact backs is refused (INV-12, D-10).
  */
 export async function approveContent(
   trx: TenantTransaction,
@@ -605,7 +627,7 @@ export async function approveContent(
     eventType: 'LISTING_CONTENT_APPROVED',
     subjectType: 'content_version',
     run: async () => {
-      const listing = await getListing(trx, input.listingId);
+      const listing = await getListingForUpdate(trx, input.listingId);
       const version = await content.getVersion(trx, listing.id, input.versionId);
       if (listing.status !== 'DRAFT' && listing.status !== 'EXPIRED') {
         throw new InvalidStateError('listing', listing.status, 'approve content');
@@ -613,6 +635,7 @@ export async function approveContent(
       if (version.status !== 'SELLER_DRAFT') {
         throw new InvalidStateError('content_version', version.status, 'be approved');
       }
+      if (listing.rowVersion !== input.expectedRowVersion) throw new ConcurrentModificationError('listing');
       const supersededId = await content.supersedeApprovedVersion(trx, listing.id);
       const approved = await content.markApproved(trx, ctx, { listingId: listing.id, versionId: version.id });
       const updated = await updateListingRow(trx, ctx, listing.id, input.expectedRowVersion, {
@@ -627,11 +650,34 @@ export async function approveContent(
         },
       };
     },
-    serialize: ({ listing, version }) => ({ listing, versionId: version.id }),
+    serialize: ({ listing, version }) => ({
+      listing,
+      versionId: version.id,
+      versionNumber: version.versionNumber,
+      status: version.status,
+      provenance: version.provenance,
+      sourceVersionId: version.sourceVersionId,
+      createdAt: version.createdAt,
+      approvedAt: version.approvedAt,
+      approvedBy: version.approvedBy,
+    }),
     revive: async (stored) => {
       const listing = reviveListing(stored);
-      const versionId = z.uuid().parse(stored['versionId']);
-      return { listing, version: await content.getVersion(trx, listing.id, versionId) };
+      const approved = StoredApproval.parse(stored);
+      const words = await content.getVersion(trx, listing.id, approved.versionId);
+      return {
+        listing,
+        version: {
+          ...words,
+          versionNumber: approved.versionNumber,
+          status: approved.status,
+          provenance: approved.provenance,
+          sourceVersionId: approved.sourceVersionId,
+          createdAt: approved.createdAt,
+          approvedAt: approved.approvedAt,
+          approvedBy: approved.approvedBy,
+        },
+      };
     },
   });
   return outcome.value;

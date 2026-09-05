@@ -240,8 +240,53 @@ characters or a 10 000-character description exceed the process-wide 16 KiB limi
 the schemas still refuse anything beyond the canonical lengths. Test suite:
 `test/integration/seller-workspace.test.ts`.
 
-Not here, by design: approval over HTTP, enhancement, version history or enumeration, deleting a
-version, editing an approved version, images, listing enumeration, publication, buyer surfaces.
+Not here, by design: enhancement, version history or enumeration, deleting a version, editing an
+approved version, images, listing enumeration, publication, buyer surfaces. Approval is Slice 1g.
+
+## Slice 1g: seller content approval
+
+One consequential route exposing the existing `listing.approve_content` command (`LIST-105`,
+`LIST-108`, `SM-CT-01`, `SM-CT-02`), registered by `src/web/routes/seller-listings.ts` under the
+same session, origin, anti-forgery, key and RLS rules as the other mutations. The authenticated
+request is the seller's explicit approval; nothing is approved automatically, generated,
+enhanced, published or relisted, and no code is issued.
+
+| Route                                                                | Declaration                                                                                                                                                 | Request                                                                                                 | Success                                   |
+| -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| `POST /seller/listings/:listingId/content/:contentVersionId/approve` | seller · listing_content_version · approve · seller-session · tenant from session · consequential · `Idempotency-Key` required · `LISTING_CONTENT_APPROVED` | `{ "expectedRowVersion": n }`; the listing and the version come from the path, nothing else is accepted | `200 { listing, approvedContentVersion }` |
+
+**Eligibility.** The version must be a `SELLER_DRAFT` of the listing in the path, both belonging
+to the session's tenant; a version of another listing, another tenant or none at all is
+`404 not_found` alike (`AUTH-221`). The listing must be `DRAFT` or `EXPIRED` (`SM-L-06`,
+`OPS-219`: a relist needs a newly approved version) and carry the expected row version, checked
+before any write. A version already `APPROVED` or `SUPERSEDED` is `409 invalid_state`, as is any
+other listing state. No latest-version rule exists in `STATE_MACHINES.md` §8, so an older
+`SELLER_DRAFT` may be approved; the newer drafts stay `SELLER_DRAFT` and the workspace keeps
+showing the latest version as the predecessor for the next save. D-10 coverage of structured
+details is enforced where the canon places it: at draft creation and at `READY` and relist
+(`SM-L-01`, `LS002`), not at approval, so approving a version whose backing fact was later
+cleared succeeds and the listing then cannot reach `READY` until the fact is restated or another
+version is approved.
+
+**Effect.** In one transaction the previously approved version, if any, becomes `SUPERSEDED`
+(its words and approval marks retained), the target becomes `APPROVED` with
+`SELLER_APPROVED_COPY` provenance, `approved_at` and `approved_by` = the seller, the listing's
+`current_content_version_id` moves to it and `row_version` advances once, and
+`LISTING_CONTENT_APPROVED` is written with `version_number` and `superseded_version_id`. The
+listing status does not change: `DRAFT → READY` is `markReady`, gated by `SM-L-01`, and an
+`EXPIRED` listing stays `EXPIRED` until the separate relist command. At most one `APPROVED`
+version exists per listing (partial unique index). The words never change (`CV001`).
+
+**Response and replay.** `approvedContentVersion` is `{ id, versionNumber, status, provenance,
+sourceVersionId, approvedAt }`: no words, no approver. The receipt stores the listing record and
+exactly those marks; a replay reads only the immutable words of that version (the response
+carries none of them) and answers the marks as stored, so replaying an approval after a later
+approval superseded it still answers `APPROVED`, byte for byte, and changes nothing. The same
+key with another listing, version, row version or command is `409 idempotency_conflict`. Test
+suite: `test/integration/seller-approval.test.ts`.
+
+Not here, by design: `READY`, publication, relisting, enhancement, editing or restoring a
+version, images, enumeration, buyer surfaces.
 
 ## Environment variables
 
