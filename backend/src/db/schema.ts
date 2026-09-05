@@ -63,6 +63,8 @@ export const AUDIT_EVENT_TYPES = [
   'SELLER_SESSION_ROTATED',
   'SELLER_SIGNED_OUT',
   'SELLER_SESSIONS_REVOKED',
+  // D-20 (Accepted 2026-09-04): a live session revoked by the active-session cap at sign-in.
+  'SELLER_SESSION_EVICTED',
   'BUYER_SESSION_CREATED',
   'OFFER_CREATED',
   'OFFER_CHANGED',

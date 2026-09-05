@@ -123,6 +123,14 @@ export class ClientIdentityError extends DomainError {
   }
 }
 
+/** OPS-730, D-20: a consequential route called without a well-formed client-supplied idempotency key. */
+export class IdempotencyKeyRequiredError extends DomainError {
+  readonly code = 'IDEMPOTENCY_KEY_REQUIRED';
+  constructor() {
+    super('a well-formed Idempotency-Key header is required');
+  }
+}
+
 /** OPS-732: an idempotency key reused for a different command or with a different payload. */
 export class IdempotencyConflictError extends DomainError {
   readonly code = 'IDEMPOTENCY_CONFLICT';

@@ -68,4 +68,6 @@ export const SQLSTATE = {
   sellerSessionNotLive: 'SS003',
   /** An invalid throttle policy was passed to the keyhole (AUTH-204). */
   signInThrottlePolicyInvalid: 'ST001',
+  /** An invalid session policy (cap or lifetimes) was passed to the keyhole (AUTH-230, D-20). */
+  sessionPolicyInvalid: 'SC001',
 } as const;

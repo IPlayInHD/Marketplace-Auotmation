@@ -42,6 +42,7 @@ export function testAuthConfig(overrides: Partial<AuthConfig> = {}): AuthConfig 
     trustedProxies: [],
     sessionIdleSeconds: 12 * 60 * 60,
     sessionAbsoluteSeconds: 30 * 24 * 60 * 60,
+    maxActiveSessions: 10,
     ...overrides,
   };
 }

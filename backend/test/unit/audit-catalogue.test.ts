@@ -54,6 +54,7 @@ describe('Audit event catalogue', () => {
       'SELLER_SESSION_ROTATED',
       'SELLER_SIGNED_OUT',
       'SELLER_SESSIONS_REVOKED',
+      'SELLER_SESSION_EVICTED',
     ]) {
       expect(names, name).toContain(name);
     }

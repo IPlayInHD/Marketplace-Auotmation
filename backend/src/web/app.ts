@@ -11,6 +11,8 @@ import {
   AntiForgeryRefusedError,
   ClientIdentityError,
   DomainError,
+  IdempotencyConflictError,
+  IdempotencyKeyRequiredError,
   OriginRefusedError,
   UnauthenticatedError,
 } from '../shared/errors.ts';
@@ -42,6 +44,8 @@ const RESPONSES = {
   unauthenticated: { error: 'unauthenticated' },
   forbiddenOrigin: { error: 'forbidden_origin' },
   forbiddenAntiForgery: { error: 'forbidden_anti_forgery' },
+  idempotencyKeyRequired: { error: 'idempotency_key_required' },
+  idempotencyConflict: { error: 'idempotency_conflict' },
   internal: { error: 'internal' },
 } as const;
 
@@ -77,6 +81,9 @@ export async function buildWebApp(options: WebAppOptions) {
     }
     if (err instanceof OriginRefusedError) return reply.code(403).send(RESPONSES.forbiddenOrigin);
     if (err instanceof AntiForgeryRefusedError) return reply.code(403).send(RESPONSES.forbiddenAntiForgery);
+    if (err instanceof IdempotencyKeyRequiredError)
+      return reply.code(400).send(RESPONSES.idempotencyKeyRequired);
+    if (err instanceof IdempotencyConflictError) return reply.code(409).send(RESPONSES.idempotencyConflict);
     if (err instanceof ClientIdentityError) {
       request.log.warn({ reason: err.reason }, 'client identity refused');
       return reply.code(400).send(RESPONSES.badRequest);

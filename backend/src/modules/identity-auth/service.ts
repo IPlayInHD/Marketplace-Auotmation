@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { AppEnvironment, AuthConfig } from '../../config.ts';
 import { establishTenantContext, type TenantTransaction } from '../../db/kysely.ts';
 import type { Database } from '../../db/schema.ts';
+import { commandContext } from '../../shared/command.ts';
 import { UnauthenticatedError, ValidationError } from '../../shared/errors.ts';
 import * as audit from '../audit/index.ts';
 import { hashAccountIdentifier, type ClientIdentity, type IdentifierKey } from './client-identity.ts';
@@ -22,6 +23,12 @@ import { THROTTLE_POLICY, type ThrottlePolicy, type ThrottleScopePolicy } from '
 // withSellerSession (SEC-101, D-19 condition 3): the single site where a presented session
 // becomes a tenant. Resolution, expiry, revocation and set_config happen in one transaction that
 // also runs the caller's work; the setting dies with the transaction.
+//
+// Idempotency (D-20, OPS-730 to OPS-732): sign-in and rotation answer a one-time secret and keep
+// no exact-response receipt; the active-session cap bounds what a retried sign-in can create.
+// Sign-out converges to signed-out. Sign-out-all runs through the idempotency store under a
+// client-supplied key: the receipt is read before liveness is required, so a replay with the
+// very token the original call revoked returns the stored outcome and mutates nothing.
 
 export interface Principal {
   sellerId: string;
@@ -61,8 +68,10 @@ export interface AuthService {
     client: ClientIdentity,
     requestId: string,
   ): Promise<{ token: string; principal: Principal }>;
+  /** Converges to signed-out: revokes a live session once, does nothing otherwise, never throws for an absent one. */
   signOut(token: unknown, requestId: string): Promise<void>;
-  signOutAll(token: unknown, requestId: string): Promise<{ revoked: number }>;
+  /** OPS-730/OPS-731 under `idempotencyKey`: exactly one revocation per key; a replay returns the stored outcome. */
+  signOutAll(token: unknown, idempotencyKey: string, requestId: string): Promise<{ revoked: number }>;
   listSessions(token: unknown): Promise<SessionSummary[]>;
 }
 
@@ -94,6 +103,15 @@ interface ReserveRow {
 interface SessionRow {
   id: string;
   absolute_expires_at: Date;
+}
+interface CreatedSessionRow extends SessionRow {
+  evicted_session_ids: string[];
+}
+interface CommandSessionRow {
+  session_id: string;
+  account_id: string;
+  seller_id: string;
+  live: boolean;
 }
 interface ResolvedRow {
   session_id: string;
@@ -139,6 +157,21 @@ async function finalize(
     select auth.finalize_sign_in_attempt(${scope}::auth.throttle_scope, ${subjectHash}, ${failed}::boolean,
       ${policy.freeFailures}::integer, ${policy.baseSeconds}::integer, ${policy.capSeconds}::integer,
       ${policy.decaySeconds}::integer)`.execute(trx);
+}
+
+/** The command name under which sign-out-all consumes its idempotency key (OPS-732, D-20). */
+export const SIGN_OUT_ALL_COMMAND = 'seller.sign_out_all';
+
+/** The session a token names, live or not, under the account's row lock; nothing is touched. */
+async function findSessionForCommand(
+  trx: TenantTransaction,
+  tokenHash: Buffer,
+  idleSeconds: number,
+): Promise<CommandSessionRow | undefined> {
+  const result = await sql<CommandSessionRow>`
+    select session_id, account_id, seller_id, live
+      from auth.find_session_for_command(${tokenHash}, ${idleSeconds}::integer)`.execute(trx);
+  return result.rows[0];
 }
 
 async function recordSignInEvent(
@@ -248,15 +281,32 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
       const principal = await db.transaction().execute(async (trx) => {
         await finalize(trx, 'client', input.client.hash, false, throttle.client);
         await finalize(trx, 'account', accountSubject, false, throttle.account);
-        const created = await sql<SessionRow>`
-          select id, absolute_expires_at from auth.create_session(${account.account_id}::uuid, ${tokenHash},
-            ${input.client.hash}, ${input.client.keyVersion}::smallint, ${config.sessionAbsoluteSeconds}::integer)`.execute(
-          trx,
-        );
+        // AUTH-230 (D-20): the cap is applied after the password proved the account, under the
+        // account's row lock; the oldest live sessions beyond it are evicted in this transaction.
+        const created = await sql<CreatedSessionRow>`
+          select id, absolute_expires_at, evicted_session_ids
+            from auth.create_session(${account.account_id}::uuid, ${tokenHash}, ${input.client.hash},
+              ${input.client.keyVersion}::smallint, ${config.sessionAbsoluteSeconds}::integer,
+              ${config.sessionIdleSeconds}::integer, ${config.maxActiveSessions}::integer)`.execute(trx);
         const session = created.rows[0];
         if (!session) throw new Error('session keyhole returned no row');
         // The seller is proven; the tenant context follows the proof, never the request.
         await establishTenantContext(trx, account.seller_id);
+        for (const evictedId of session.evicted_session_ids) {
+          await audit.appendAuditEvent(trx, account.seller_id, {
+            eventType: 'SELLER_SESSION_EVICTED',
+            actorType: 'SELLER',
+            actorRef: account.seller_id,
+            subjectType: 'seller_session',
+            subjectId: evictedId,
+            requestId: input.requestId,
+            summary: {
+              account_id: account.account_id,
+              replaced_by_session_id: session.id,
+              active_session_cap: config.maxActiveSessions,
+            },
+          });
+        }
         await audit.appendAuditEvent(trx, account.seller_id, {
           eventType: 'SELLER_SIGN_IN_SUCCEEDED',
           actorType: 'SELLER',
@@ -268,6 +318,7 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
             account_id: account.account_id,
             client_hash: input.client.hash,
             client_key_version: input.client.keyVersion,
+            evicted_count: session.evicted_session_ids.length,
           },
         });
         return {
@@ -309,42 +360,69 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
         };
       }),
 
-    signOut: (token, requestId) =>
-      withSellerSession(token, async (trx, principal) => {
+    // AUTH-231 (D-20): a live session is revoked once, with one event; a missing, unknown,
+    // expired or already revoked one changes nothing. The caller answers the same fixed
+    // response either way, so nothing here may distinguish the cases.
+    signOut: async (token, requestId) => {
+      if (!isWellFormedToken(token)) return;
+      const tokenHash = hashSessionToken(token);
+      await db.transaction().execute(async (trx) => {
+        const found = await findSessionForCommand(trx, tokenHash, config.sessionIdleSeconds);
+        if (!found?.live) return;
         const result = await sql<{ revoked: boolean }>`
-          select auth.revoke_session(${principal.sessionId}::uuid, 'signed_out'::auth.revocation_reason) as revoked`.execute(
+          select auth.revoke_session(${found.session_id}::uuid, 'signed_out'::auth.revocation_reason) as revoked`.execute(
           trx,
         );
-        if (!result.rows[0]?.revoked) throw new UnauthenticatedError();
-        await audit.appendAuditEvent(trx, principal.sellerId, {
+        if (!result.rows[0]?.revoked) return;
+        await establishTenantContext(trx, found.seller_id);
+        await audit.appendAuditEvent(trx, found.seller_id, {
           eventType: 'SELLER_SIGNED_OUT',
           actorType: 'SELLER',
-          actorRef: principal.sellerId,
+          actorRef: found.seller_id,
           subjectType: 'seller_session',
-          subjectId: principal.sessionId,
+          subjectId: found.session_id,
           requestId,
-          summary: { account_id: principal.accountId },
+          summary: { account_id: found.account_id },
         });
-      }),
+      });
+    },
 
-    signOutAll: (token, requestId) =>
-      withSellerSession(token, async (trx, principal) => {
-        const result = await sql<{ revoked: number }>`
-          select auth.revoke_account_sessions(${principal.accountId}::uuid, 'signed_out_all'::auth.revocation_reason) as revoked`.execute(
-          trx,
-        );
-        const revoked = Number(result.rows[0]?.revoked ?? 0);
-        await audit.appendAuditEvent(trx, principal.sellerId, {
+    // AUTH-232 (D-20): the receipt is read first under the tenant the presented token names,
+    // live or not, so a replay with the token the original call revoked returns the stored
+    // outcome and touches nothing. Only a fresh execution requires a live session. The payload
+    // binds the key to the initiating session, so another token under the same key conflicts.
+    signOutAll: async (token, idempotencyKey, requestId) => {
+      if (!isWellFormedToken(token)) throw new UnauthenticatedError();
+      const tokenHash = hashSessionToken(token);
+      return db.transaction().execute(async (trx) => {
+        const found = await findSessionForCommand(trx, tokenHash, config.sessionIdleSeconds);
+        if (!found) throw new UnauthenticatedError();
+        await establishTenantContext(trx, found.seller_id);
+        const ctx = commandContext({ sellerId: found.seller_id, requestId, idempotencyKey });
+        const outcome = await audit.runIdempotent<{ revoked: number }>(trx, ctx, {
+          command: SIGN_OUT_ALL_COMMAND,
+          payload: { sessionId: found.session_id },
           eventType: 'SELLER_SESSIONS_REVOKED',
-          actorType: 'SELLER',
-          actorRef: principal.sellerId,
           subjectType: 'seller_account',
-          subjectId: principal.accountId,
-          requestId,
-          summary: { revoked_count: revoked, initiated_by_session_id: principal.sessionId },
+          run: async () => {
+            if (!found.live) throw new UnauthenticatedError();
+            const result = await sql<{ revoked: number }>`
+              select auth.revoke_account_sessions(${found.account_id}::uuid, 'signed_out_all'::auth.revocation_reason) as revoked`.execute(
+              trx,
+            );
+            const revoked = Number(result.rows[0]?.revoked ?? 0);
+            return {
+              value: { revoked },
+              subjectId: found.account_id,
+              summary: { revoked_count: revoked, initiated_by_session_id: found.session_id },
+            };
+          },
+          serialize: (value) => ({ revoked: value.revoked }),
+          revive: (stored) => ({ revoked: Number(stored['revoked'] ?? 0) }),
         });
-        return { revoked };
-      }),
+        return outcome.value;
+      });
+    },
 
     listSessions: (token) =>
       withSellerSession(token, async (trx, principal) => {

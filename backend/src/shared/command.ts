@@ -16,6 +16,15 @@ export type WriteContext = z.infer<typeof WriteContextSchema>;
 export const CommandContextSchema = WriteContextSchema.extend({
   idempotencyKey: Identifier,
 });
+
+/**
+ * The HTTP form of a client-supplied idempotency key (OPS-730, D-20): the `Idempotency-Key`
+ * header carrying one client-generated UUID. A UUID cannot carry a token, a password or any
+ * other credential material into the receipt and audit stores, which is why nothing looser is
+ * accepted.
+ */
+export const IDEMPOTENCY_KEY_HEADER = 'idempotency-key';
+export const IdempotencyKeyHeaderSchema = z.uuid();
 export type CommandContext = z.infer<typeof CommandContextSchema>;
 
 export function writeContext(input: WriteContext): WriteContext {

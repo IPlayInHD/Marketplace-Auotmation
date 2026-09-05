@@ -650,3 +650,96 @@ declarations (`AUTH-222`) and the origin hook; founder-controlled synthetic acco
 provisioning; the six audit event types added to the §12 catalogue, the TypeScript list and
 the database enum; and every gate in condition 6 implemented and passing in the same change.
 Nothing in condition 7 is part of it.
+
+---
+
+## D-20 — Authentication-route idempotency semantics
+**Date** 2026-09-04 · **Status** Accepted (2026-09-04) · **Depends on** D-17 (Accepted), D-18 (Accepted), D-19 (Accepted)
+
+**Context.** `OPS-730` requires a client-supplied idempotency key on every consequential
+action and `OPS-731` requires a retry under the same key to return the original outcome.
+`AUTH-205` requires the seller session token to exist server-side only as its SHA-256, never
+in any store, record or log other than the client's cookie. The seller-authentication routes
+of D-19 issue and revoke bearer tokens, so the two requirements cannot both be met literally
+on the routes that answer a token: an exact-response receipt for sign-in or rotation would
+have to store, or recoverably encrypt, the token the original response carried. This entry
+records how the requirements are reconciled for the authentication routes, and for no other
+route.
+
+**Decision.** The authoritative inventory of the authentication routes under `OPS-730`:
+
+| Route | Classification | Required behaviour |
+|---|---|---|
+| `GET /seller/auth/me` | Read-only | No idempotency key |
+| `GET /seller/auth/sessions` | Read-only | No idempotency key |
+| `POST /seller/auth/sign-in` | One-time-secret exception | No exact-response receipt |
+| `POST /seller/auth/sessions/rotate` | One-time-secret exception | No exact-response receipt |
+| `POST /seller/auth/sign-out` | Naturally idempotent exception | Fixed `204` on repeat |
+| `POST /seller/auth/sign-out-all` | Consequential | Full `OPS-730`/`OPS-731` idempotency |
+
+**Rationale and consequences.**
+
+1. Raw session tokens are never stored and never recoverably encrypted in a receipt, an audit
+   event, a log or any other record. The only server-side form of a token is its SHA-256 in
+   `auth.seller_session` (`AUTH-205`, `OPS-712`).
+2. An exact replay of a sign-in or rotation response would have to return the token that
+   response carried, which conflicts with the hash-only storage of `AUTH-205`: a hash cannot be
+   turned back into the token it was taken from.
+3. The system therefore prioritises bearer-token secrecy over exact response replay for
+   sign-in and rotation. Neither route takes an idempotency key; an `Idempotency-Key` header
+   sent to either is ignored and is never a promise of exact replay.
+4. A lost sign-in response leaves a live session whose token reached nobody, and a fresh
+   sign-in creates another session. The active-session cap below bounds how many such sessions
+   can exist, and the seller can inspect and revoke them after authenticating (`AUTH-208`).
+5. A lost rotation response leaves the client holding only the revoked predecessor. Every
+   request with it answers the canonical unauthenticated response, the client is signed out and
+   must authenticate with the password again. The orphan successor is live until it expires or
+   the seller revokes it after re-authentication.
+6. Retrying rotation with the revoked predecessor never creates another successor: rotation
+   requires a live session, and the predecessor was revoked in the transaction that created its
+   successor (`AUTH-206`).
+7. Sign-out converges to signed-out. A live session is revoked once with one
+   `SELLER_SIGNED_OUT` event; a repeated, unknown, expired or absent session changes nothing;
+   every case answers the same fixed `204` and clears the cookie, so the response never reveals
+   whether a session existed. A well-formed token still requires its anti-forgery value and the
+   origin check (`SEC-310`, `SEC-311`), both decided on the request alone, so no live session
+   can be revoked cross-site.
+8. Sign-out-all requires a client-supplied idempotency key: one client-generated UUID in the
+   `Idempotency-Key` header, refused before any lookup or mutation when missing or malformed. A
+   UUID cannot carry credential material into the stores. The first execution revokes every
+   live session of the account, writes `SELLER_SESSIONS_REVOKED`, stores a receipt in
+   `app.idempotency_receipt` and answers `{ revoked }`, in one transaction, so a failure leaves
+   no revocation, no event and no receipt. A replay under the same key with the same initiating
+   token returns the stored non-secret outcome, requires no live session, creates no event and
+   no receipt, and mutates nothing. The same key with another command or another initiating
+   session is a conflict (`OPS-732`); a revoked token under a different key performs nothing.
+   Receipts are tenant rows under row-level security and hold the command name, a fingerprint,
+   the outcome and identifiers only: no token, token hash, anti-forgery value, password,
+   address, IP or client hash.
+9. This is a narrow authentication exception. `OPS-730` and `OPS-731` are unchanged for
+   listing, offer, negotiation, approval and every other consequential route, and this entry is
+   no template for further exceptions.
+10. Weakening session-token secrecy in any way, a receipt able to return a token included,
+    requires a superseding decision.
+
+**Active-session cap (`AUTH-230`).** No canonical value existed before this entry, so a
+conservative private-alpha default is recorded: at most 10 live sessions per seller account
+(`AUTH_MAX_ACTIVE_SESSIONS`, integer 1 to 50, default 10). On a successful sign-in at the cap,
+the same transaction, under the account's row lock, creates the new session and revokes the
+oldest live sessions beyond the cap, ordered by creation time and then identifier, with reason
+`evicted`, so the total never exceeds the cap even under concurrent sign-ins. Each eviction is
+audited as `SELLER_SESSION_EVICTED` with the account, the evicted and the new session
+identifiers and the cap, never a token. Revoked and expired sessions are not live and are
+never counted. The cap is applied only after the password verified, so it discloses nothing
+about an account before verification. Rotation revokes its predecessor in the same transaction
+and never raises the live count.
+
+**Retention.** The sign-out-all receipt joins the existing `OPS-733` follow-up: receipts are
+append-only and undeletable in this slice, no configured retry horizon and no retention job
+exist yet, and the private-alpha restriction of D-18 stays in force until retention is
+implemented.
+
+**Unchanged.** D-17, D-18 and D-19 are not modified; their text stands as accepted. `Q-09`,
+`Q-10` and `Q-11` remain open. Slice 0 remains deferred, incomplete and unpassed (D-18). No
+open registration, password reset, verification delivery, social login, second factor or buyer
+authentication is introduced.

@@ -3,9 +3,11 @@ import { z } from 'zod';
 import type { AuthConfig } from '../../config.ts';
 import * as auth from '../../modules/identity-auth/index.ts';
 import * as sellers from '../../modules/sellers/index.ts';
+import { IDEMPOTENCY_KEY_HEADER, IdempotencyKeyHeaderSchema } from '../../shared/command.ts';
 import {
   AntiForgeryRefusedError,
   ClientIdentityError,
+  IdempotencyKeyRequiredError,
   OriginRefusedError,
   UnauthenticatedError,
 } from '../../shared/errors.ts';
@@ -14,6 +16,11 @@ import {
 // below applies to every state-changing request in this tree and to nothing else. Every route
 // declares its authorization (AUTH-222). Nothing here exposes a listing, a sign-up page, a
 // password reset, a second factor or a buyer capability (D-19 condition 7).
+//
+// Idempotency (D-20): the two GET routes and sign-in take no key; an Idempotency-Key header on
+// sign-in or rotation is ignored, never a promise of exact replay, because the token those
+// routes answer is stored nowhere it could be replayed from (AUTH-205). Sign-out converges to
+// signed-out with one fixed response. Sign-out-all requires a client-generated UUID key.
 
 export interface SellerRoutesOptions {
   auth: auth.AuthService;
@@ -59,6 +66,13 @@ function registerSellerRoutes(
     );
     if (!resolved.ok) throw new ClientIdentityError(resolved.reason);
     return auth.hashClientIdentifier(resolved.canonical, key);
+  };
+
+  /** OPS-730 (D-20): one well-formed client-generated UUID, or the request is refused before any work. */
+  const requiredIdempotencyKey = (request: FastifyRequest): string => {
+    const parsed = IdempotencyKeyHeaderSchema.safeParse(request.headers[IDEMPOTENCY_KEY_HEADER]);
+    if (!parsed.success) throw new IdempotencyKeyRequiredError();
+    return parsed.data;
   };
 
   /**
@@ -148,14 +162,25 @@ function registerSellerRoutes(
     },
   );
 
+  // AUTH-231 (D-20): one fixed 204 whether a live session was revoked or nothing was there to
+  // revoke. A well-formed token still needs its anti-forgery value, a check on the request alone
+  // that discloses nothing about any session; without a well-formed token nothing could be
+  // mutated and nothing is looked up.
   app.post('/auth/sign-out', { config: { authorization: 'seller-session' } }, async (request, reply) => {
-    await options.auth.signOut(provenToken(request), request.id);
+    const presented = presentedToken(request);
+    if (auth.isWellFormedToken(presented)) {
+      if (!auth.verifyAntiForgery(request.headers, presented)) throw new AntiForgeryRefusedError();
+      await options.auth.signOut(presented, request.id);
+    }
     clearSession(reply);
     return reply.code(204).send();
   });
 
+  // AUTH-232 (D-20): consequential; the key is required before any lookup or mutation.
   app.post('/auth/sign-out-all', { config: { authorization: 'seller-session' } }, async (request, reply) => {
-    const result = await options.auth.signOutAll(provenToken(request), request.id);
+    const token = provenToken(request);
+    const key = requiredIdempotencyKey(request);
+    const result = await options.auth.signOutAll(token, key, request.id);
     clearSession(reply);
     return reply.code(200).send({ revoked: result.revoked });
   });

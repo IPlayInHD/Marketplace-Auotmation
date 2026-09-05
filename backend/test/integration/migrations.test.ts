@@ -11,7 +11,9 @@ import { query } from '../helpers/inspect.ts';
 // OPS-513, OPS-514, OPS-714 (forward-only migrations) and the schema-level scans of OPS-703,
 // OPS-709, OPS-713, OPS-716, OPS-725, SEC-100.
 
-describe('Migrations', () => {
+// The first test applies the migrations the rest inspect, so this suite keeps its written order
+// even when the runner shuffles (the schema scans are not independent of the ledger test).
+describe('Migrations', { shuffle: false }, () => {
   let env: TestDatabase;
   beforeAll(async () => {
     env = await startDatabase({ applyMigrations: false });
@@ -31,6 +33,7 @@ describe('Migrations', () => {
       '0006_relist_content_and_code_expiry.sql',
       '0007_seller_authentication.sql',
       '0008_sign_in_failure_throttle.sql',
+      '0009_auth_idempotency_and_session_cap.sql',
     ]);
     expect(first.alreadyApplied).toEqual([]);
 
@@ -52,6 +55,7 @@ describe('Migrations', () => {
       '0006_relist_content_and_code_expiry.sql',
       '0007_seller_authentication.sql',
       '0008_sign_in_failure_throttle.sql',
+      '0009_auth_idempotency_and_session_cap.sql',
     ]);
   });
 
@@ -215,6 +219,7 @@ describe('Migrations', () => {
     expect(keyholes.map((f) => f.name)).toEqual([
       'create_session',
       'finalize_sign_in_attempt',
+      'find_session_for_command',
       'list_account_sessions',
       'record_sign_in_event',
       'reserve_sign_in_attempt',
@@ -224,7 +229,7 @@ describe('Migrations', () => {
       'rotate_session',
       'sign_in_lookup',
     ]);
-    // One signature per keyhole: migration 0008 dropped the ones it replaced instead of overloading.
+    // One signature per keyhole: migrations 0008 and 0009 dropped the ones they replaced instead of overloading.
     expect(functions.map((f) => f.name)).toEqual([...new Set(functions.map((f) => f.name))]);
     for (const f of keyholes) {
       expect(f.secdef, `${f.name} SECURITY DEFINER`).toBe(true);
@@ -248,6 +253,17 @@ describe('Migrations', () => {
       'scope',
       'subject_hash',
       'updated_at',
+    ]);
+    // D-20: the eviction reason exists beside the three of 0007.
+    const reasons = await query<{ value: string }>(
+      env.superuserUrl,
+      `SELECT unnest(enum_range(NULL::auth.revocation_reason))::text AS value`,
+    );
+    expect(reasons.map((r) => r.value).sort()).toEqual([
+      'evicted',
+      'rotated',
+      'signed_out',
+      'signed_out_all',
     ]);
   });
 

@@ -58,7 +58,9 @@ judgment.
   infrastructure phases.
 - Money is stored as integer minor units with an explicit currency. Never floats.
 - Ledgers (messages, offers, approvals, audit events) are append-only.
-- Every consequential action needs an audit event and an idempotency key.
+- Every consequential action needs an audit event and an idempotency key. The only
+  exceptions are the authentication routes classified in `docs/decisions/DECISION_LOG.md`
+  D-20; nothing else is exempt.
 - New or changed AI behaviour requires evals before merge. See `docs/ai/EVAL_STRATEGY.md`.
 - The approved backend architecture baseline is `docs/decisions/DECISION_LOG.md`
   D-17 (Accepted 2026-09-03; supersedes D-08): TypeScript on Node.js, Fastify,

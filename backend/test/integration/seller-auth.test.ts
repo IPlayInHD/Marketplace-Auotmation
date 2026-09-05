@@ -152,6 +152,7 @@ describe('Seller authentication foundation (D-19)', () => {
       account_id: accountA.accountId,
       client_hash: expected.hash,
       client_key_version: 1,
+      evicted_count: 0,
     });
   });
 
@@ -290,14 +291,17 @@ describe('Seller authentication foundation (D-19)', () => {
       post(harness, `${AUTH_PREFIX}/sign-out`, s),
       post(harness, `${AUTH_PREFIX}/sessions/rotate`, s),
     ]);
-    const codes = results.map((r) => r.statusCode).sort();
     for (const r of results) {
       bodies.push(r.body);
       const c = cookieOf(r, harness.cookieName)?.value;
       if (c) secrets.push(c);
     }
-    expect(codes.filter((c) => c === 200 || c === 204)).toHaveLength(1);
-    expect(codes.filter((c) => c === 401)).toHaveLength(3);
+    // Sign-out converges and always answers 204 (D-20); of the three rotations at most one wins,
+    // and only when it reached the row before the sign-out did.
+    expect(results[2]?.statusCode).toBe(204);
+    const rotations = [results[0], results[1], results[3]].map((r) => r?.statusCode);
+    expect(rotations.filter((c) => c === 200).length).toBeLessThanOrEqual(1);
+    expect(rotations.filter((c) => c === 401).length).toBeGreaterThanOrEqual(2);
     const rows = await query<{ n: string }>(
       env.superuserUrl,
       `SELECT count(*)::text AS n FROM auth.seller_session s
@@ -320,7 +324,8 @@ describe('Seller authentication foundation (D-19)', () => {
     expect(cookieOf(out, harness.cookieName)?.value).toBe('');
     expect((await meRequest(a1.token)).statusCode).toBe(401);
     expect((await meRequest(a2.token)).statusCode).toBe(200);
-    expect((await post(harness, `${AUTH_PREFIX}/sign-out`, a1)).statusCode).toBe(401);
+    // AUTH-231 (D-20): a repeated sign-out converges to the same fixed response.
+    expect((await post(harness, `${AUTH_PREFIX}/sign-out`, a1)).statusCode).toBe(204);
 
     const listed = await get(harness, `${AUTH_PREFIX}/sessions`, a2.token);
     bodies.push(listed.body);
@@ -338,7 +343,9 @@ describe('Seller authentication foundation (D-19)', () => {
     expect(sessions.filter((s) => s['current'] === true)).toHaveLength(1);
     expect(listed.body).not.toMatch(/[0-9a-f]{64}/);
 
-    const all = await post(harness, `${AUTH_PREFIX}/sign-out-all`, a2);
+    const all = await post(harness, `${AUTH_PREFIX}/sign-out-all`, a2, {
+      headers: { origin: TEST_ORIGIN, 'idempotency-key': randomUUID() },
+    });
     bodies.push(all.body);
     expect(all.statusCode).toBe(200);
     const revoked = all.json<{ revoked: number }>().revoked;

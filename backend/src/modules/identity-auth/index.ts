@@ -64,6 +64,7 @@ export {
 } from './throttle.ts';
 export {
   ProvisionInputSchema,
+  SIGN_OUT_ALL_COMMAND,
   createAuthService,
   normalizeEmail,
   provisionSyntheticAccount,

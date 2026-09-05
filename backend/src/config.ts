@@ -45,6 +45,7 @@ const AuthConfigSchema = z.object({
     .min(300)
     .max(90 * 86_400)
     .default(30 * 24 * 60 * 60),
+  AUTH_MAX_ACTIVE_SESSIONS: z.coerce.number().int().min(1).max(50).default(10),
 });
 
 export interface AuthConfig {
@@ -57,6 +58,8 @@ export interface AuthConfig {
   trustedProxies: string[];
   sessionIdleSeconds: number;
   sessionAbsoluteSeconds: number;
+  /** Live sessions per account; a sign-in beyond it evicts the oldest (AUTH-230, D-20). Default 10. */
+  maxActiveSessions: number;
 }
 
 export interface WebConfig {
@@ -95,6 +98,7 @@ export function loadAuthConfig(env: NodeJS.ProcessEnv, appEnv: AppEnvironment): 
     trustedProxies,
     sessionIdleSeconds: parsed.AUTH_SESSION_IDLE_SECONDS,
     sessionAbsoluteSeconds: parsed.AUTH_SESSION_ABSOLUTE_SECONDS,
+    maxActiveSessions: parsed.AUTH_MAX_ACTIVE_SESSIONS,
   };
 }
 

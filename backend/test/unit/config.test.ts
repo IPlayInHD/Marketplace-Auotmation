@@ -55,6 +55,11 @@ describe('Configuration', () => {
     expect(ok.trustedProxies).toEqual(['10.0.0.0/8', '192.0.2.10']);
     expect(ok.sessionIdleSeconds).toBe(12 * 60 * 60);
     expect(ok.sessionAbsoluteSeconds).toBe(30 * 24 * 60 * 60);
+    // D-20: the recorded private-alpha default of the active-session cap, and its bounds.
+    expect(ok.maxActiveSessions).toBe(10);
+    expect(loadAuthConfig({ ...AUTH_ENV, AUTH_MAX_ACTIVE_SESSIONS: '3' }, 'local').maxActiveSessions).toBe(3);
+    expect(() => loadAuthConfig({ ...AUTH_ENV, AUTH_MAX_ACTIVE_SESSIONS: '0' }, 'local')).toThrow();
+    expect(() => loadAuthConfig({ ...AUTH_ENV, AUTH_MAX_ACTIVE_SESSIONS: '51' }, 'local')).toThrow();
     expect(() => loadAuthConfig({ ...AUTH_ENV, AUTH_CLIENT_HASH_KEY: 'too-short' }, 'local')).toThrow();
     expect(() => loadAuthConfig({ ...AUTH_ENV, AUTH_CLIENT_HASH_KEY: 'AB'.repeat(32) }, 'local')).toThrow(
       /hex/,

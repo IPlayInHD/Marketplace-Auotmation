@@ -117,6 +117,9 @@ schema-level assertion), **build** (a check that fails the build or startup), **
 | AUTH-217 | Sign-in, sign-out, failure, lockout, reset and second-factor events are audited with a hashed client identifier rather than a raw address (`SEC-043`). | integration | MVP |
 | AUTH-218 | No API key, personal access token or machine credential is issued at MVP. Introducing one requires a decision entry in `decisions/DECISION_LOG.md`. | build: no such issuance route exists | MVP |
 | AUTH-219 | Sign-out invalidates the session server-side. Clearing the cookie alone is not sufficient. | integration: captured token replayed after sign-out fails | MVP |
+| AUTH-230 | At most a server-controlled number of live sessions exist per seller account (default 10, `decisions/DECISION_LOG.md` D-20). A sign-in at the cap revokes the oldest live sessions beyond it in the same transaction and audits each eviction (`SELLER_SESSION_EVICTED`); revoked and expired sessions are not counted; the cap holds under concurrent sign-ins and is applied only after password verification. | integration: sequential and concurrent sign-in at the cap | MVP |
+| AUTH-231 | Sign-out converges to signed-out: a live session is revoked once with one event; a repeated, unknown, expired or absent session changes nothing; every case answers the same fixed response and clears the cookie, disclosing nothing about whether a session existed (D-20). | integration: repeat, missing, unknown, expired and revoked cases indistinguishable | MVP |
+| AUTH-232 | Sign-out-all requires a client-supplied idempotency key and replays its stored non-secret outcome under the same key and initiating session without requiring the session to be live (`OPS-730` to `OPS-732`, D-20). Sign-in and rotation are one-time-secret exceptions: no receipt may hold or recover the token they answer (`AUTH-205`), so no exact replay exists for them. | integration: first execution, replay, conflict, cross-tenant and rollback | MVP |
 
 ---
 
@@ -259,7 +262,7 @@ test list.
 
 | ID | Requirement | Verification | Gate |
 |---|---|---|---|
-| OPS-730 | Every consequential action requires a client-supplied idempotency key (`CLAUDE.md` engineering rules). A request without one is rejected. | integration: full consequential-route inventory | MVP |
+| OPS-730 | Every consequential action requires a client-supplied idempotency key (`CLAUDE.md` engineering rules). A request without one is rejected. The authentication routes are classified in `decisions/DECISION_LOG.md` D-20: sign-out-all is consequential; sign-in and rotation are one-time-secret exceptions and sign-out a naturally idempotent one; no other route is exempt. | integration: full consequential-route inventory | MVP |
 | OPS-731 | The key is stored with the outcome. A retry with the same key returns the original outcome and creates no second effect (`AUTH-007`, `SM-A-05`, eval `AP-04`, `AP-08`). | integration | MVP |
 | OPS-732 | A key reused with a different payload is an error, not a silent replay and not a second effect. | integration | MVP |
 | OPS-733 | Idempotency records are retained for at least the client retry horizon, and that horizon is stated in configuration rather than implied. | build: configuration present; integration | MVP |
