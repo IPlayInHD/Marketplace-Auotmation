@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { describe, expect, it } from 'vitest';
 import * as auth from '../../src/modules/identity-auth/index.ts';
@@ -284,19 +284,56 @@ describe('Trusted-proxy policy and client identifiers (D-19 condition 6, SEC-043
   });
 
   it('hashes client and account identifiers with the configured key and version, never storing the input', () => {
-    const key = { key: randomBytes(32), version: 3 };
-    const other = { key: randomBytes(32), version: 3 };
-    const client = auth.hashClientIdentifier('203.0.113.9', key);
-    expect(client).toEqual({ hash: expect.stringMatching(/^[0-9a-f]{64}$/) as string, keyVersion: 3 });
-    expect(auth.hashClientIdentifier('203.0.113.9', key).hash).toBe(client.hash);
-    expect(auth.hashClientIdentifier('203.0.113.9', other).hash).not.toBe(client.hash);
-    expect(auth.hashClientIdentifier('203.0.113.9', { ...key, version: 4 }).hash).not.toBe(client.hash);
-    expect(client.hash).not.toContain('203');
-    const account = auth.hashAccountIdentifier(['seller-a', 'synthetic.invalid'].join('@'), key);
-    expect(account).toMatch(/^[0-9a-f]{64}$/);
-    expect(account).not.toBe(
-      auth.hashClientIdentifier(['seller-a', 'synthetic.invalid'].join('@'), key).hash,
+    // Fixed, test-only secrets: randomness is not the subject here, determinism is.
+    const key = { key: Buffer.from('synthetic-client-hash-key-000001', 'utf8'), version: 3 };
+    const other = { key: Buffer.from('synthetic-client-hash-key-000002', 'utf8'), version: 3 };
+    expect(key.key).toHaveLength(32);
+    expect(other.key).toHaveLength(32);
+    const address = '203.0.113.9';
+    const client = auth.hashClientIdentifier(address, key);
+    // The stored form (SEC-043): a 64-character lowercase hex digest and the key version, nothing
+    // else. The digest is the input's keyed transform, not the input, so it is neither the raw
+    // address nor a string that contains it. (A short hex fragment of the address may of course
+    // occur inside any digest; that reveals nothing and is not asserted against.)
+    expect(Object.keys(client).sort()).toEqual(['hash', 'keyVersion']);
+    expect(client.keyVersion).toBe(3);
+    expect(client.hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(client.hash).toHaveLength(64);
+    expect(client.hash).toBe(client.hash.toLowerCase());
+    expect(client.hash).not.toBe(address);
+    expect(client.hash).not.toContain(address);
+    expect(JSON.stringify(client)).not.toContain(address);
+    // Deterministic under the same secret and the same canonical input: the documented construction
+    // is HMAC-SHA256 over the domain-separated, version-bound canonical identifier.
+    expect(auth.hashClientIdentifier(address, key).hash).toBe(client.hash);
+    expect(client.hash).toBe(
+      createHmac('sha256', key.key).update(`client:v${key.version}:${address}`, 'utf8').digest('hex'),
     );
+    // Sensitive to the input, the secret and the key version.
+    expect(auth.hashClientIdentifier('203.0.113.10', key).hash).not.toBe(client.hash);
+    expect(auth.hashClientIdentifier(address, other).hash).not.toBe(client.hash);
+    expect(auth.hashClientIdentifier(address, { ...key, version: 4 }).hash).not.toBe(client.hash);
+    // Equivalent presentations hash identically once canonicalised (the caller's step): the mapped
+    // IPv4 form unwraps to the same address, and two IPv6 addresses in one /64 share a canonical
+    // prefix, so each pair yields one digest.
+    expect(
+      auth.hashClientIdentifier(auth.canonicalClientIdentifier('::ffff:203.0.113.9') ?? '', key).hash,
+    ).toBe(client.hash);
+    expect(auth.hashClientIdentifier(auth.canonicalClientIdentifier('2001:db8::1') ?? '', key).hash).toBe(
+      auth.hashClientIdentifier(auth.canonicalClientIdentifier('2001:db8:0:0:ffff::1') ?? '', key).hash,
+    );
+    // Account identifiers use the same construction in their own domain: same shape, and never the
+    // same digest as a client identifier of the same text.
+    const email = ['seller-a', 'synthetic.invalid'].join('@');
+    const account = auth.hashAccountIdentifier(email, key);
+    expect(account).toMatch(/^[0-9a-f]{64}$/);
+    expect(account).not.toContain(email);
+    expect(auth.hashAccountIdentifier(email, key)).toBe(account);
+    expect(account).toBe(
+      createHmac('sha256', key.key).update(`account:v${key.version}:${email}`, 'utf8').digest('hex'),
+    );
+    expect(account).not.toBe(auth.hashClientIdentifier(email, key).hash);
+    expect(auth.hashAccountIdentifier(email, other)).not.toBe(account);
   });
 
   it('rejects an invalid trusted-proxy configuration at startup', () => {
