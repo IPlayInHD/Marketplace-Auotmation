@@ -743,3 +743,110 @@ implemented.
 `Q-10` and `Q-11` remain open. Slice 0 remains deferred, incomplete and unpassed (D-18). No
 open registration, password reset, verification delivery, social login, second factor or buyer
 authentication is introduced.
+
+---
+
+## D-21 — Seller fact and draft mutation semantics
+**Date** 2026-09-05 · **Status** Accepted (2026-09-05) · **Depends on** D-10 (Accepted), D-17 (Accepted), D-18 (Accepted), D-19 (Accepted), D-20 (Accepted)
+
+**Context.** `LIST-101` lets an authenticated seller state the `LIST-002` product facts and
+write the original title, summary and description of a listing, all stored with provenance
+`SELLER_PROVIDED_FACT` (`LIST-033`, D-10). The Slice 1e integration left both as internal
+domain commands with no route, no audit event and no idempotency receipt. The Slice 1f
+attempt of 2026-09-05 stopped before coding and reported the canonical gap: `CLAUDE.md`
+requires an audit event and an idempotency key on every consequential action with no
+exemption outside D-20, `OPS-781` requires that no consequential action emits no event, and
+yet no entry of `ai/POLICY_AND_AUTHORIZATION.md` §12 records a fact being stated, corrected or
+cleared, or a seller draft being saved; `LIST-101`, `product/UX_FLOWS.md` S-02 steps 2 to 5
+and `product/INVENTORY_AND_SALES.md` `OPS-310` name no event for them either; no canonical
+rule fixed the listing states in which they may be edited, no optimistic-concurrency value
+protected them (`OPS-738`), and no path returned a stated fact to unknown. This entry resolves
+that gap. The founders chose Path A of the gap report: the mutations are consequential.
+
+**Decision.** Seller product-fact saves and seller-authored draft saves are consequential
+actions, because a stated fact is what the agent may later cite (`G-05`, `INV-12`), a draft is
+the text that can become the buyer-visible copy (`LIST-008`, `SM-CT-03`), and both feed the
+approval that `SM-L-01` gates publication on. They therefore require authentication and
+authorization, idempotency, catalogued audit events, optimistic concurrency, transactional
+writes and immutable content-version lineage. The accepted rules:
+
+1. Seller fact replacement and seller-authored draft saves are consequential (`OPS-730`,
+   `OPS-780`, `AUTH-INV-09`, `NFR-004`).
+2. Both require a canonical UUID `Idempotency-Key` (`OPS-730`, D-20 for the header form).
+3. Both use the authenticated seller and the forced-RLS tenant context, established only by
+   the live session (`AUTH-220`, `SEC-100`, `SEC-101`, D-19 condition 3).
+4. Both require optimistic concurrency against the listing row version (`OPS-738`): the
+   request carries the row version the seller read, and a stale value is refused before any
+   write with the established generic conflict response.
+5. They are allowed only while the listing is `DRAFT` or `EXPIRED` (`LIST-101` AC1;
+   `SM-L-06` and `OPS-216`, which require a new content version before a relist).
+6. No edit is allowed in `READY`, `LISTED`, `CLOSED` or `CANCELLED`. `CLOSED` names the
+   closing states of `SM-L-02` that are not `EXPIRED`, that is `SOLD` and `ARCHIVED`;
+   `ACTIVE_CONVERSATIONS`, `OFFER_PENDING` and `PENDING_SALE` are likewise refused, since
+   rule 5 is the complete allow-list. A `READY` listing is edited by first returning it to
+   `DRAFT` along the drawn edge (`STATE_MACHINES.md` §1, `LIST-134` AC3).
+7. Fact saves use full-replacement semantics: supplied non-blank canonical facts become or
+   replace seller-provided facts; omitted facts return to the canonical unknown state, which
+   is the absence of a `ProductFact` row (`LIST-033`, D-10); blank strings are not stored as
+   facts and are treated as omitted. Values are trimmed; the eleven `LIST-002` fact keys are
+   the only keys; title, summary and description are copy, never facts. A seller may state
+   any value for any key, the condition ladder of `ai/LISTING_ENHANCEMENT.md` §6.4 being a
+   validator of enhancement output, not of seller input (`LIST-059`, Edit row).
+8. A successful fact change increments the listing row version exactly once.
+9. An identical fact replacement is a no-op: no fact write, no row-version increment, no
+   audit event, and the idempotency key is consumed with a stable stored outcome (the rule of
+   migration `0003`).
+10. Seller drafts remain immutable `ListingContentVersion` records (`DM-06`, `OPS-706`,
+    `SM-CT-02`).
+11. A revised draft references its predecessor through `source_version_id`. The predecessor
+    is the listing's latest content version by version number, whatever its lifecycle status,
+    because that is the text the seller is revising; `LIST-042` requires the pointer so that
+    any later copy can be traced to the exact seller input it came from, and it does not
+    prescribe which version a seller revision cites, so this rule completes it without
+    contradicting it.
+12. The first seller draft may have no predecessor: `source_version_id` is null.
+13. A successful changed draft creates exactly one new `SELLER_DRAFT` version with
+    `SELLER_PROVIDED_FACT` provenance and increments the listing row version exactly once.
+14. An identical draft save against the current predecessor, the same title, summary,
+    description and structured details, is a no-op: no new content version, no row-version
+    increment, no audit event, and the key is consumed with a stable stored outcome.
+15. Exact replay returns the original outcome without duplicating writes (`OPS-731`): the
+    receipt stores the listing record and identifiers only, never a fact value or a line of
+    draft text, so no receipt outlives a cleared fact (rule 19); a replay of a fact
+    replacement re-reads the listing's seller-provided facts, and a replay of a draft save
+    re-reads the immutable version by its stored identifier.
+16. Two audit events are authorized and added to `ai/POLICY_AND_AUTHORIZATION.md` §12 as a
+    completion of `OPS-781` for two consequential actions the list did not name:
+    `LISTING_FACTS_CHANGED` and `LISTING_CONTENT_DRAFTED`.
+17. Audit events record keys, counts, identifiers and version information only:
+    `LISTING_FACTS_CHANGED` carries the sorted keys set and cleared, their counts and the
+    previous and new listing row version; `LISTING_CONTENT_DRAFTED` carries the new version's
+    identifier and number, the predecessor's identifier when present and the previous and
+    new listing row version. Both carry the actor, the listing as subject, the request id and
+    the idempotency key (`OPS-784`).
+18. Audit events never contain raw fact values, title, summary, description, acquisition
+    cost, the asking-price floor, credentials or request bodies (`OPS-783`, `OPS-569`,
+    `DATA-105`).
+19. Returning a fact to unknown is a valid fact change: the row is removed, the change is
+    audited by key, and the deleted value is retained nowhere. The runtime role gains
+    `DELETE` on `app.product_fact` for this one purpose (migration `0011`); `product_fact`
+    is not a ledger of `OPS-705`, and the provenance and identity of a surviving row remain
+    immutable.
+20. This decision introduces no AI generation, approval, publication or public access. The
+    seller's words are stored exactly as validated and normalised; nothing rewrites, expands,
+    summarises or generates them (`LIST-006`, `LIST-108` AC1, D-12).
+
+**Why consequential.** `RISK-10` (the agent states a fact the seller never supplied) is
+mitigated by `G-05`, which lets the agent cite only a `SELLER_PROVIDED_FACT`; the set of
+citable facts is therefore a control, and a change to it must be reconstructable from audit
+alone (`OPS-785` in spirit, `AUTH-INV-09`). A draft is the candidate for the single approved
+version of `SM-CT-01`, and `LIST-042` and `LIST-045` require its lineage to be traceable. A lost
+response on either save must not create a second version or a second effect on retry
+(`OPS-731`), and a stale device must not silently overwrite a newer edit (`OPS-738`). None of
+this can be met by an unaudited, un-receipted write.
+
+**Unchanged.** D-10 through D-20 are not modified; their text stands as accepted. Migrations
+`0001` to `0010` are not modified. No listing-state transition is added or performed by these
+saves. `Q-09`, `Q-10` and `Q-11` remain open. Slice 0 remains deferred, incomplete and unpassed
+(D-18). No enhancement, approval, publication, buyer surface, image upload, listing
+enumeration, pricing or acquisition-cost editing is introduced.
