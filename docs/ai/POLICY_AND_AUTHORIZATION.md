@@ -234,6 +234,7 @@ overrides learned preference.
 
 `LISTING_CREATED` · `LISTING_CONTENT_ENHANCED` · `LISTING_CONTENT_APPROVED` ·
 `LISTING_ASKING_PRICE_CHANGED` · `LISTING_STATUS_CHANGED` ·
+`LISTING_FACTS_CHANGED` · `LISTING_CONTENT_DRAFTED` ·
 `SELLER_POLICY_CHANGED` · `MINIMUM_PRICE_CHANGED` · `ACCESS_CODE_CREATED` ·
 `ACCESS_CODE_ROTATED` · `ACCESS_CODE_REVOKED` · `ACCESS_CODE_EXPIRED` ·
 `SELLER_SIGN_IN_SUCCEEDED` · `SELLER_SIGN_IN_FAILED` · `SELLER_SIGN_IN_THROTTLED` ·
@@ -264,6 +265,19 @@ version and the cause, written in the same transaction as the closure it belongs
 (`OPS-787`). It carries no code, no hash and no protected value. Added on 2026-09-04 to
 complete `OPS-780` and `OPS-781` for a consequential change this list did not name; this is
 completion of an existing requirement, not a new decision.
+
+`LISTING_FACTS_CHANGED` records every successful change to the seller-provided fact set of a
+listing (`LIST-101`, D-21): the sorted keys set or replaced, the sorted keys cleared, their
+counts and the previous and new listing row version, never a fact value, so a cleared value is
+retained nowhere. `LISTING_CONTENT_DRAFTED` records every seller-authored draft content version
+created (`LIST-101`, `LIST-042`, D-21): the new version's identifier and number, its
+predecessor's identifier when one exists and the previous and new listing row version, never a
+title, summary or description. Both carry the actor, the seller, the listing as subject, the
+policy version in force, the request id and the idempotency key, and are written in the same
+transaction as the change (`OPS-780`, `OPS-781`, `OPS-784`, `OPS-787`). An identical
+resubmission changes nothing and writes neither. Added on 2026-09-05 under
+`decisions/DECISION_LOG.md` D-21, which classifies both saves as consequential actions this
+list did not name; this is completion of an existing requirement under an accepted decision.
 
 The seven seller-authentication events record `AUTH-217`, `AUTH-206` and `AUTH-230` under
 `decisions/DECISION_LOG.md` D-19 (Accepted 2026-09-04) and D-20 (Accepted 2026-09-04).

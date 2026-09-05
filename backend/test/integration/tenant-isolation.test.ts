@@ -321,7 +321,8 @@ describe('Tenant isolation', () => {
       inventory_item: ['INSERT', 'SELECT', 'UPDATE'],
       listing: ['INSERT', 'SELECT', 'UPDATE'],
       listing_content_version: ['INSERT', 'SELECT', 'UPDATE'],
-      product_fact: ['INSERT', 'SELECT', 'UPDATE'],
+      // D-21 rule 19 (migration 0011): a fact returns to unknown by removing its row.
+      product_fact: ['DELETE', 'INSERT', 'SELECT', 'UPDATE'],
       seller_policy_version: ['INSERT', 'SELECT'],
       audit_event: ['INSERT', 'SELECT'],
       idempotency_receipt: ['INSERT', 'SELECT'],

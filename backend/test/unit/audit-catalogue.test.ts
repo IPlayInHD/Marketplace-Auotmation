@@ -47,6 +47,9 @@ describe('Audit event catalogue', () => {
     expect(names).toContain('LISTING_STATUS_CHANGED');
     expect(names).toContain('LISTING_ASKING_PRICE_CHANGED');
     expect(names).toContain('ACCESS_CODE_EXPIRED');
+    // D-21 (Accepted 2026-09-05): seller fact replacement and seller draft saves.
+    expect(names).toContain('LISTING_FACTS_CHANGED');
+    expect(names).toContain('LISTING_CONTENT_DRAFTED');
     for (const name of [
       'SELLER_SIGN_IN_SUCCEEDED',
       'SELLER_SIGN_IN_FAILED',

@@ -34,7 +34,7 @@ describe('Web process', () => {
     expect(res.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
   });
 
-  it('registers exactly the nine declared seller routes, each with its complete canonical AUTH-222 declaration, and no buyer route', async () => {
+  it('registers exactly the eleven declared seller routes, each with its complete canonical AUTH-222 declaration, and no buyer route', async () => {
     const listingPrefix = `${ROUTE_PREFIXES.seller}/listings`;
     expect(declaredRoutes(harness.app)).toEqual([
       {
@@ -91,6 +91,18 @@ describe('Web process', () => {
         authorization: 'seller-session',
         declaration: SELLER_LISTING_DECLARATIONS.setAskingPrice,
       },
+      {
+        method: 'PUT',
+        url: `${listingPrefix}/:listingId/facts`,
+        authorization: 'seller-session',
+        declaration: SELLER_LISTING_DECLARATIONS.replaceFacts,
+      },
+      {
+        method: 'PUT',
+        url: `${listingPrefix}/:listingId/draft`,
+        authorization: 'seller-session',
+        declaration: SELLER_LISTING_DECLARATIONS.saveDraft,
+      },
     ]);
     // Every declaration states every required field, and the tenant never comes from the request.
     for (const route of declaredRoutes(harness.app)) {
@@ -109,6 +121,10 @@ describe('Web process', () => {
       `${ROUTE_PREFIXES.buyer}`,
       `${listingPrefix}/:listingId/publish`,
       `${listingPrefix}/:listingId/status`,
+      `${listingPrefix}/:listingId/approve`,
+      `${listingPrefix}/:listingId/enhance`,
+      `${listingPrefix}/:listingId/versions`,
+      `${listingPrefix}/:listingId/images`,
       `${ROUTE_PREFIXES.seller}`,
       `${AUTH_PREFIX}/sign-up`,
       `${AUTH_PREFIX}/reset`,
@@ -119,6 +135,11 @@ describe('Web process', () => {
       expect(harness.app.hasRoute({ method: 'POST', url }), url).toBe(false);
     }
     expect(harness.app.hasRoute({ method: 'DELETE', url: `${listingPrefix}/:listingId` })).toBe(false);
+    for (const url of [`${listingPrefix}/:listingId/facts`, `${listingPrefix}/:listingId/draft`]) {
+      expect(harness.app.hasRoute({ method: 'PUT', url }), url).toBe(true);
+      for (const method of ['GET', 'POST', 'PATCH', 'DELETE'] as const)
+        expect(harness.app.hasRoute({ method, url }), `${method} ${url}`).toBe(false);
+    }
     expect(harness.app.hasRoute({ method: 'GET', url: listingPrefix })).toBe(false);
     for (const url of [`${ROUTE_PREFIXES.buyer}/abcdefghijklmnop`, `${listingPrefix}/x/publish`, '/signup']) {
       const res = await harness.app.inject({ method: 'GET', url });

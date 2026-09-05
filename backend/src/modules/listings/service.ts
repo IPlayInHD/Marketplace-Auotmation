@@ -400,6 +400,191 @@ export async function setAskingPrice(
   return outcome.value;
 }
 
+/** The listing states in which the seller's facts and drafts may change (D-21 rules 5 and 6). */
+const EDITABLE_STATUSES: readonly ListingStatus[] = ['DRAFT', 'EXPIRED'];
+
+function requireEditable(listing: ListingRecord, attempted: string): void {
+  if (!EDITABLE_STATUSES.includes(listing.status)) {
+    throw new InvalidStateError('listing', listing.status, attempted);
+  }
+}
+
+export interface ListingFactsResult {
+  listing: ListingRecord;
+  /** The seller-provided fact set after the command, sorted by key; absence is unknown (D-10). */
+  facts: content.ProductFactRecord[];
+}
+
+export interface SellerDraftResult {
+  listing: ListingRecord;
+  /** The version the save produced, or the unchanged predecessor when the save was a no-op. */
+  version: content.ContentVersionRecord;
+}
+
+/** The seller's workspace for one listing (LIST-100 AC3): the record, its facts and its latest version. */
+export interface ListingWorkspace {
+  listing: ListingRecord;
+  facts: content.ProductFactRecord[];
+  /** The latest content version by number, whatever its status, or null before the first draft. */
+  draft: content.ContentVersionRecord | null;
+}
+
+export async function getListingWorkspace(
+  trx: TenantTransaction,
+  listingId: string,
+): Promise<ListingWorkspace> {
+  const listing = await getListing(trx, listingId);
+  const facts = await content.listFacts(trx, listing.id);
+  const draft = await content.getLatestVersion(trx, listing.id);
+  return { listing, facts, draft: draft ?? null };
+}
+
+/** The HTTP body of a fact replacement: the row version the seller read and the complete fact statement. */
+export const ReplaceFactsInputSchema = z.strictObject({
+  expectedRowVersion: z.number().int().min(1),
+  facts: content.SellerFactsSchema,
+});
+
+/**
+ * D-21 rules 7 to 9, 15 and 17: the seller's complete statement of the LIST-002 facts replaces the
+ * listing's seller-provided facts. The listing row is locked, must be DRAFT or EXPIRED and must
+ * carry the row version the seller read; then keys that are new or changed are upserted, keys the
+ * seller omitted are removed (the unknown state is the absence of a row, and the removed value is
+ * retained nowhere), and equal keys are left alone. A change increments the row version once and
+ * writes LISTING_FACTS_CHANGED with the sorted keys set and cleared, their counts and both row
+ * versions, never a value; an identical statement is a no-op with no write and no event that still
+ * consumes the key. The receipt stores the listing record and the resulting keys only, so a replay
+ * returns the stored record with the listing's seller-provided facts re-read (rule 15).
+ */
+export async function replaceFacts(
+  trx: TenantTransaction,
+  ctx: CommandContext,
+  input: { listingId: string; expectedRowVersion: number; facts: content.SellerFacts },
+): Promise<ListingFactsResult> {
+  const facts = content.SellerFactsSchema.parse(input.facts);
+  const outcome = await audit.runIdempotent<ListingFactsResult>(trx, ctx, {
+    command: 'listing.replace_facts',
+    payload: { listingId: input.listingId, expectedRowVersion: input.expectedRowVersion, facts },
+    eventType: 'LISTING_FACTS_CHANGED',
+    subjectType: 'listing',
+    run: async () => {
+      const listing = await getListingForUpdate(trx, input.listingId);
+      requireEditable(listing, 'change its facts');
+      if (listing.rowVersion !== input.expectedRowVersion) throw new ConcurrentModificationError('listing');
+      const result = await content.replaceSellerFacts(trx, ctx, { listingId: listing.id, facts });
+      if (result.setKeys.length === 0 && result.clearedKeys.length === 0) {
+        return { value: { listing, facts: result.facts }, subjectId: listing.id, changed: false };
+      }
+      const updated = await updateListingRow(trx, ctx, listing.id, input.expectedRowVersion, {});
+      return {
+        value: { listing: updated, facts: result.facts },
+        subjectId: updated.id,
+        ...(updated.currentPolicyVersionId !== null
+          ? { policyVersionId: updated.currentPolicyVersionId }
+          : {}),
+        summary: {
+          set_keys: result.setKeys,
+          cleared_keys: result.clearedKeys,
+          set_count: result.setKeys.length,
+          cleared_count: result.clearedKeys.length,
+          previous_row_version: listing.rowVersion,
+          row_version: updated.rowVersion,
+        },
+      };
+    },
+    serialize: ({ listing, facts: stored }) => ({ listing, factKeys: stored.map((f) => f.key) }),
+    revive: async (stored) => {
+      const listing = reviveListing(stored);
+      return { listing, facts: await content.listFacts(trx, listing.id) };
+    },
+  });
+  return outcome.value;
+}
+
+/**
+ * The HTTP body of a seller draft save: the row version the seller read, the predecessor the
+ * workspace showed (null for a first draft) and the seller's copy.
+ */
+export const SaveSellerDraftInputSchema = content.SellerDraftContentSchema.extend({
+  expectedRowVersion: z.number().int().min(1),
+  sourceVersionId: z.uuid().nullable(),
+});
+export type SaveSellerDraftInput = z.input<typeof SaveSellerDraftInputSchema>;
+
+/**
+ * D-21 rules 10 to 15 and 17: the seller's own copy becomes a new immutable SELLER_DRAFT version
+ * (LIST-101, LIST-108 path). The listing row is locked, must be DRAFT or EXPIRED and must carry
+ * the row version the seller read; the cited predecessor must be the listing's latest version,
+ * or null when none exists, so a stale or unrelated predecessor is refused before any write; every
+ * structured detail must be a recorded seller fact (INV-12). Copy identical to the predecessor is a
+ * no-op with no version, no row-version change and no event that still consumes the key. A change
+ * inserts exactly one version with source_version_id set to the predecessor (LIST-042), increments
+ * the row version once and writes LISTING_CONTENT_DRAFTED with identifiers and versions only. The
+ * receipt stores the listing record and the version identifier; the immutable version is re-read
+ * on replay. Nothing rewrites, expands or generates the seller's words (LIST-006, D-12).
+ */
+export async function saveSellerDraft(
+  trx: TenantTransaction,
+  ctx: CommandContext,
+  input: { listingId: string } & SaveSellerDraftInput,
+): Promise<SellerDraftResult> {
+  const { listingId, expectedRowVersion, sourceVersionId, ...copy } = SaveSellerDraftInputSchema.extend({
+    listingId: z.uuid(),
+  }).parse(input);
+  const draft: content.DraftCopy = {
+    title: copy.title,
+    summary: copy.summary ?? null,
+    description: copy.description ?? null,
+    structuredDetails: copy.structuredDetails ?? {},
+  };
+  const outcome = await audit.runIdempotent<SellerDraftResult>(trx, ctx, {
+    command: 'listing.save_seller_draft',
+    payload: { listingId, expectedRowVersion, sourceVersionId, ...draft },
+    eventType: 'LISTING_CONTENT_DRAFTED',
+    subjectType: 'listing',
+    run: async () => {
+      const listing = await getListingForUpdate(trx, listingId);
+      requireEditable(listing, 'save a seller draft');
+      if (listing.rowVersion !== expectedRowVersion) throw new ConcurrentModificationError('listing');
+      const latest = await content.getLatestVersion(trx, listing.id);
+      if ((latest?.id ?? null) !== sourceVersionId) throw new ConcurrentModificationError('content_version');
+      if (latest !== undefined && content.carriesSameCopy(latest, draft)) {
+        return { value: { listing, version: latest }, subjectId: listing.id, changed: false };
+      }
+      const version = await content.createSellerDraft(trx, ctx, {
+        listingId: listing.id,
+        title: draft.title,
+        ...(draft.summary !== null ? { summary: draft.summary } : {}),
+        ...(draft.description !== null ? { description: draft.description } : {}),
+        structuredDetails: draft.structuredDetails,
+        sourceVersionId: latest?.id ?? null,
+      });
+      const updated = await updateListingRow(trx, ctx, listing.id, expectedRowVersion, {});
+      return {
+        value: { listing: updated, version },
+        subjectId: updated.id,
+        ...(updated.currentPolicyVersionId !== null
+          ? { policyVersionId: updated.currentPolicyVersionId }
+          : {}),
+        summary: {
+          content_version_id: version.id,
+          version_number: version.versionNumber,
+          ...(version.sourceVersionId !== null ? { source_version_id: version.sourceVersionId } : {}),
+          previous_row_version: listing.rowVersion,
+          row_version: updated.rowVersion,
+        },
+      };
+    },
+    serialize: ({ listing, version }) => ({ listing, versionId: version.id }),
+    revive: async (stored) => {
+      const listing = reviveListing(stored);
+      const versionId = z.uuid().parse(stored['versionId']);
+      return { listing, version: await content.getVersion(trx, listing.id, versionId) };
+    },
+  });
+  return outcome.value;
+}
+
 export interface ApproveContentResult {
   listing: ListingRecord;
   version: content.ContentVersionRecord;

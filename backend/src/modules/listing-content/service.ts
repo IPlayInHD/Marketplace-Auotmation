@@ -29,6 +29,45 @@ const FactKey = z.enum(PRODUCT_FACT_KEYS);
 const FactValue = z.string().trim().min(1).max(2000);
 const FactsInput = z.partialRecord(FactKey, FactValue);
 
+/**
+ * The seller's complete statement of the LIST-002 facts (D-21 rule 7), for the domain and for
+ * HTTP alike: each canonical key maps to the seller's text, trimmed, at most 2000 characters. A
+ * blank value is not a fact and is dropped, so `{ name: '' }` and `{}` are the same statement and
+ * fingerprint identically; an unknown key, a non-string or an over-long value is refused. No key
+ * is ever defaulted: what the seller did not state stays absent (LIST-033, D-10).
+ */
+export const SellerFactsSchema = z.partialRecord(FactKey, z.string().trim().max(2000)).transform((facts) => {
+  const stated: Partial<Record<ProductFactKey, string>> = {};
+  for (const key of PRODUCT_FACT_KEYS) {
+    const value = facts[key];
+    if (value !== undefined && value.length > 0) stated[key] = value;
+  }
+  return stated;
+});
+export type SellerFacts = z.output<typeof SellerFactsSchema>;
+
+const OptionalCopy = (max: number) =>
+  z
+    .string()
+    .trim()
+    .max(max)
+    .transform((value) => (value.length === 0 ? undefined : value))
+    .optional();
+
+/**
+ * The seller's own copy for one draft (LIST-002 title, summary, description) and the structured
+ * details it shows, each of which must be a recorded fact (INV-12). Only the title is required;
+ * a blank summary, description or detail is absent, never stored as empty text. Nothing here is
+ * rewritten, expanded or generated (LIST-006, D-12).
+ */
+export const SellerDraftContentSchema = z.strictObject({
+  title: z.string().trim().min(1).max(200),
+  summary: OptionalCopy(1000),
+  description: OptionalCopy(10_000),
+  structuredDetails: SellerFactsSchema.optional(),
+});
+export type SellerDraftContent = z.output<typeof SellerDraftContentSchema>;
+
 export interface ProductFactRecord {
   key: ProductFactKey;
   value: string;
@@ -136,11 +175,13 @@ export async function recordFacts(
   }));
 }
 
+/** The seller-provided facts of a listing, by key. No other provenance is read as a fact (D-10, D-21 rule 7). */
 export async function listFacts(trx: TenantTransaction, listingId: string): Promise<ProductFactRecord[]> {
   const rows = await trx
     .selectFrom('product_fact')
     .select(['key', 'value', 'provenance', 'supplied_at'])
     .where('listing_id', '=', listingId)
+    .where('provenance', '=', 'SELLER_PROVIDED_FACT')
     .orderBy('key')
     .execute();
   return rows.map((r) => ({
@@ -151,18 +192,91 @@ export async function listFacts(trx: TenantTransaction, listingId: string): Prom
   }));
 }
 
+export interface FactReplacement {
+  /** The seller-provided fact set after the replacement, sorted by key. */
+  facts: ProductFactRecord[];
+  /** Keys whose value is new or changed, sorted. */
+  setKeys: ProductFactKey[];
+  /** Keys that were seller-provided and are now unknown, sorted. */
+  clearedKeys: ProductFactKey[];
+}
+
+function sortedKeys(keys: ProductFactKey[]): ProductFactKey[] {
+  return [...keys].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/**
+ * D-21 rule 7: full replacement of the seller-provided facts of one listing. The desired set is
+ * compared with the current SELLER_PROVIDED_FACT rows: a key whose value is new or different is
+ * upserted with a fresh supplied_at, a key absent from the desired set is deleted (rule 19: the
+ * unknown state is the absence of a row, and the value is retained nowhere), and a key whose
+ * value is equal is left untouched, its supplied_at standing. A fact of any other provenance,
+ * should one ever exist, is neither read as current nor removed. When nothing differs no
+ * statement runs, so the caller can treat the replacement as a no-op (rule 9).
+ */
+export async function replaceSellerFacts(
+  trx: TenantTransaction,
+  ctx: WriteContext,
+  input: { listingId: string; facts: SellerFacts },
+): Promise<FactReplacement> {
+  const desired = SellerFactsSchema.parse(input.facts);
+  const current = await listFacts(trx, input.listingId);
+  const currentValue = new Map(current.map((f) => [f.key, f.value]));
+  const setKeys = sortedKeys(
+    PRODUCT_FACT_KEYS.filter((key) => desired[key] !== undefined && desired[key] !== currentValue.get(key)),
+  );
+  const clearedKeys = sortedKeys(
+    PRODUCT_FACT_KEYS.filter((key) => desired[key] === undefined && currentValue.has(key)),
+  );
+  if (setKeys.length === 0 && clearedKeys.length === 0) return { facts: current, setKeys, clearedKeys };
+  if (setKeys.length > 0) {
+    await trx
+      .insertInto('product_fact')
+      .values(
+        setKeys.map((key) => ({
+          seller_id: ctx.sellerId,
+          listing_id: input.listingId,
+          key,
+          value: desired[key] ?? '',
+          provenance: 'SELLER_PROVIDED_FACT' as const,
+          request_id: ctx.requestId,
+        })),
+      )
+      .onConflict((oc) =>
+        oc.columns(['listing_id', 'key']).doUpdateSet({
+          value: (eb) => eb.ref('excluded.value'),
+          supplied_at: sql`now()`,
+          request_id: ctx.requestId,
+        }),
+      )
+      .execute();
+  }
+  if (clearedKeys.length > 0) {
+    await trx
+      .deleteFrom('product_fact')
+      .where('listing_id', '=', input.listingId)
+      .where('provenance', '=', 'SELLER_PROVIDED_FACT')
+      .where('key', 'in', clearedKeys)
+      .execute();
+  }
+  return { facts: await listFacts(trx, input.listingId), setKeys, clearedKeys };
+}
+
 const DraftInput = z.strictObject({
   listingId: z.uuid(),
   title: z.string().trim().min(1).max(200),
   summary: z.string().trim().min(1).max(1000).optional(),
   description: z.string().trim().min(1).max(10_000).optional(),
   structuredDetails: z.partialRecord(FactKey, FactValue).optional(),
+  /** The version this draft revises (D-21 rule 11), or null for a first draft (rule 12). Validated by the caller. */
+  sourceVersionId: z.uuid().nullable().optional(),
 });
 
 /**
  * Creates a SELLER_DRAFT content version from the seller's own words (LIST-108 path). Every
  * structured detail must already be a recorded seller fact for this listing: the draft cannot
- * carry a detail the seller did not state (INV-12).
+ * carry a detail the seller did not state (INV-12). The predecessor, when given, is recorded as
+ * source_version_id (LIST-042); the data layer requires it to be a version of the same listing.
  */
 export async function createSellerDraft(
   trx: TenantTransaction,
@@ -193,7 +307,7 @@ export async function createSellerDraft(
         summary: valid.summary ?? null,
         description: valid.description ?? null,
         structured_details: JSON.stringify(details),
-        source_version_id: null,
+        source_version_id: valid.sourceVersionId ?? null,
         request_id: ctx.requestId,
         approved_at: null,
         approved_by: null,
@@ -219,6 +333,47 @@ export async function getVersion(
     .executeTakeFirst();
   if (!row) throw new NotFoundError('content_version');
   return toVersion(row);
+}
+
+/**
+ * The listing's latest content version by version number, whatever its lifecycle status: the
+ * text the seller is currently working from and the predecessor a revised draft must cite
+ * (D-21 rule 11). Undefined when the listing has no version yet.
+ */
+export async function getLatestVersion(
+  trx: TenantTransaction,
+  listingId: string,
+): Promise<ContentVersionRecord | undefined> {
+  const row = await trx
+    .selectFrom('listing_content_version')
+    .selectAll()
+    .where('listing_id', '=', listingId)
+    .orderBy('version_number', 'desc')
+    .limit(1)
+    .executeTakeFirst();
+  return row ? toVersion(row) : undefined;
+}
+
+/** The copy a seller draft would carry, in the normalised form the domain stores. */
+export interface DraftCopy {
+  title: string;
+  summary: string | null;
+  description: string | null;
+  structuredDetails: Record<string, string>;
+}
+
+function sortedEntries(details: Record<string, string>): string {
+  return JSON.stringify(Object.entries(details).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+}
+
+/** True when a version already carries exactly this copy, detail for detail (D-21 rule 14). */
+export function carriesSameCopy(version: ContentVersionRecord, copy: DraftCopy): boolean {
+  return (
+    version.title === copy.title &&
+    version.summary === copy.summary &&
+    version.description === copy.description &&
+    sortedEntries(version.structuredDetails) === sortedEntries(copy.structuredDetails)
+  );
 }
 
 /** The single APPROVED version of a listing, if any (SM-CT-01). */

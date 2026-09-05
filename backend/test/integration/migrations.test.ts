@@ -35,6 +35,7 @@ describe('Migrations', { shuffle: false }, () => {
       '0008_sign_in_failure_throttle.sql',
       '0009_auth_idempotency_and_session_cap.sql',
       '0010_sign_out_all_replay_isolation.sql',
+      '0011_seller_facts_and_draft_events.sql',
     ]);
     expect(first.alreadyApplied).toEqual([]);
 
@@ -58,6 +59,7 @@ describe('Migrations', { shuffle: false }, () => {
       '0008_sign_in_failure_throttle.sql',
       '0009_auth_idempotency_and_session_cap.sql',
       '0010_sign_out_all_replay_isolation.sql',
+      '0011_seller_facts_and_draft_events.sql',
     ]);
   });
 

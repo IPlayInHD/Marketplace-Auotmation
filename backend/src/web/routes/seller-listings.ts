@@ -1,21 +1,24 @@
 import type { FastifyPluginCallback } from 'fastify';
 import { z } from 'zod';
 import type * as auth from '../../modules/identity-auth/index.ts';
+import type * as content from '../../modules/listing-content/index.ts';
 import * as listings from '../../modules/listings/index.ts';
 import { commandContext } from '../../shared/command.ts';
 import { MoneySchema, type Money } from '../../shared/money.ts';
 import type { RouteDeclaration } from '../authorization.ts';
 import { provenToken, requiredIdempotencyKey } from './seller-request.ts';
 
-// The first authenticated seller listing surface (Slice 1e): create a listing, read one listing,
-// set its asking price. Creation is the seller's one action of LIST-100 AC1, the composite
-// command `listing.create_with_item` that creates the inventory item and its DRAFT listing in one
-// transaction under one receipt; the other two routes are the HTTP form of one existing domain
-// command each. None of them changes the commands' semantics. Identity comes from the session only (AUTH-220): every
-// handler runs its command inside withSellerSession, the single route-to-tenant construction
-// site, under forced row-level security. Another tenant's listing or inventory item is exactly
-// as absent as one that does not exist (AUTH-221). Nothing here lists, searches, deletes,
-// publishes, transitions, uploads, enhances, prices or exposes anything to a buyer.
+// The authenticated seller listing surface: Slice 1e (create a listing, read it, set its asking
+// price) and Slice 1f under D-21 (replace its seller-provided facts, save a seller-authored draft,
+// and read the workspace those two produce). Creation is the seller's one action of LIST-100 AC1,
+// the composite command `listing.create_with_item` that creates the inventory item and its DRAFT
+// listing in one transaction under one receipt; every other mutation is the HTTP form of one
+// domain command each, and none of the routes changes a command's semantics. Identity comes from
+// the session only (AUTH-220): every handler runs its command inside withSellerSession, the single
+// route-to-tenant construction site, under forced row-level security. Another tenant's listing is
+// exactly as absent as one that does not exist (AUTH-221). Nothing here lists, searches, deletes,
+// publishes, transitions, uploads, enhances, approves, prices or exposes anything to a buyer, and
+// nothing rewrites a seller's words (LIST-006, D-12).
 
 export interface SellerListingRoutesOptions {
   auth: auth.AuthService;
@@ -36,6 +39,20 @@ const AskingPriceBody = z.strictObject({
   expectedRowVersion: z.number().int().min(1),
   price: MoneySchema,
 });
+
+/** Exactly the domain representation of `listing.replace_facts`: optimistic version and the complete fact statement. */
+const ReplaceFactsBody = listings.ReplaceFactsInputSchema;
+
+/** Exactly the domain representation of `listing.save_seller_draft`: optimistic version, predecessor and the seller's copy. */
+const SaveDraftBody = listings.SaveSellerDraftInputSchema;
+
+/**
+ * The canonical maxima of one statement (eleven facts of up to 2000 characters) or one draft (a
+ * title, a summary of 1000, a description of 10 000 and the details) exceed the process-wide
+ * 16 KiB body limit once encoded, so the two consequential routes carry their own bound. It is
+ * still a fixed bound (OPS-798): the schemas above refuse anything beyond the canonical lengths.
+ */
+const COPY_BODY_LIMIT = 256 * 1024;
 
 /** The seller-safe view of a listing: no seller, account, session, policy, receipt or audit identifier. */
 export interface SellerListingView {
@@ -64,6 +81,61 @@ export function presentListing(listing: listings.ListingRecord): SellerListingVi
   };
 }
 
+/** One seller-provided fact as the seller reads it back: the value, its provenance and when it was stated. */
+export interface SellerFactView {
+  value: string;
+  provenance: content.ProductFactRecord['provenance'];
+  suppliedAt: Date;
+}
+
+/**
+ * The seller-provided facts keyed by canonical fact key. A key the seller has not stated is absent,
+ * which is the canonical unknown state (LIST-033, D-10): never null, zero, false or placeholder text.
+ */
+export type SellerFactsView = Partial<Record<content.ProductFactKey, SellerFactView>>;
+
+export function presentFacts(facts: readonly content.ProductFactRecord[]): SellerFactsView {
+  const view: SellerFactsView = {};
+  for (const fact of facts) {
+    view[fact.key] = { value: fact.value, provenance: fact.provenance, suppliedAt: fact.suppliedAt };
+  }
+  return view;
+}
+
+/**
+ * The seller's view of a content version: its words exactly as stored, its number, status and
+ * provenance, and the predecessor it revises. No approver identifier: that is the seller id.
+ */
+export interface SellerDraftView {
+  id: string;
+  versionNumber: number;
+  status: content.ContentVersionRecord['status'];
+  provenance: content.ContentVersionRecord['provenance'];
+  title: string;
+  summary: string | null;
+  description: string | null;
+  structuredDetails: Record<string, string>;
+  sourceVersionId: string | null;
+  createdAt: Date;
+  approvedAt: Date | null;
+}
+
+export function presentDraft(version: content.ContentVersionRecord): SellerDraftView {
+  return {
+    id: version.id,
+    versionNumber: version.versionNumber,
+    status: version.status,
+    provenance: version.provenance,
+    title: version.title,
+    summary: version.summary,
+    description: version.description,
+    structuredDetails: version.structuredDetails,
+    sourceVersionId: version.sourceVersionId,
+    createdAt: version.createdAt,
+    approvedAt: version.approvedAt,
+  };
+}
+
 /** The canonical AUTH-222 declarations of the listing routes, mirrored in the README inventory. */
 export const SELLER_LISTING_DECLARATIONS = {
   create: {
@@ -84,10 +156,10 @@ export const SELLER_LISTING_DECLARATIONS = {
   read: {
     actor: 'seller',
     resource: 'listing',
-    action: 'read',
+    action: 'read_workspace',
     authentication: 'seller-session',
     authorization:
-      'the live session names the tenant; row-level security hides every other tenant, so their listings are not found',
+      'the live session names the tenant; row-level security hides every other tenant, so their listings, facts and versions are not found',
     tenantSource: 'session',
     classification: 'read-only',
     idempotency: 'none; no Idempotency-Key',
@@ -106,6 +178,38 @@ export const SELLER_LISTING_DECLARATIONS = {
     idempotency:
       'Idempotency-Key required (client UUID); exact replay returns the stored outcome; the current price resubmitted is a no-op that still consumes the key',
     audit: 'LISTING_ASKING_PRICE_CHANGED on change, in the same transaction; none for the no-op',
+    failure:
+      '401 unauthenticated; 403 forbidden_origin or forbidden_anti_forgery; 400 bad_request or idempotency_key_required; 404 not_found; 409 invalid_state, stale_row_version or idempotency_conflict',
+  },
+  replaceFacts: {
+    actor: 'seller',
+    resource: 'listing',
+    action: 'replace_facts',
+    authentication: 'seller-session',
+    authorization:
+      'the live session names the tenant; the listing must be DRAFT or EXPIRED and carry the expected row version; the statement replaces the seller-provided facts in full, omitted keys returning to unknown (D-21)',
+    tenantSource: 'session',
+    classification: 'consequential',
+    idempotency:
+      'Idempotency-Key required (client UUID); exact replay returns the stored listing with the seller-provided facts re-read; an identical statement is a no-op that still consumes the key',
+    audit:
+      'LISTING_FACTS_CHANGED on change with the sorted keys set and cleared, their counts and both row versions, never a value, in the same transaction; none for the no-op',
+    failure:
+      '401 unauthenticated; 403 forbidden_origin or forbidden_anti_forgery; 400 bad_request or idempotency_key_required; 404 not_found; 409 invalid_state, stale_row_version or idempotency_conflict',
+  },
+  saveDraft: {
+    actor: 'seller',
+    resource: 'listing',
+    action: 'save_seller_draft',
+    authentication: 'seller-session',
+    authorization:
+      'the live session names the tenant; the listing must be DRAFT or EXPIRED and carry the expected row version; the cited predecessor must be the latest content version, or null before the first; every structured detail must be a recorded seller fact (D-21, INV-12)',
+    tenantSource: 'session',
+    classification: 'consequential',
+    idempotency:
+      'Idempotency-Key required (client UUID); exact replay returns the stored listing and re-reads the immutable version; copy identical to the predecessor is a no-op that still consumes the key',
+    audit:
+      'LISTING_CONTENT_DRAFTED on change with the new version identifier and number, the predecessor identifier when present and both row versions, never a word of copy, in the same transaction; none for the no-op',
     failure:
       '401 unauthenticated; 403 forbidden_origin or forbidden_anti_forgery; 400 bad_request or idempotency_key_required; 404 not_found; 409 invalid_state, stale_row_version or idempotency_conflict',
   },
@@ -135,16 +239,22 @@ export function registerSellerListingRoutes(
     },
   );
 
+  // The seller workspace (LIST-100 AC3): the listing, its seller-provided facts and its latest
+  // content version, read under the session's tenant with no key, no event and no receipt.
   app.get(
     '/listings/:listingId',
     { config: { authorization: 'seller-session', declaration: SELLER_LISTING_DECLARATIONS.read } },
     async (request, reply) => {
       const token = provenToken(request, cookieName);
       const params = ListingParams.parse(request.params);
-      const listing = await options.auth.withSellerSession(token, (trx) =>
-        listings.getListing(trx, params.listingId),
+      const workspace = await options.auth.withSellerSession(token, (trx) =>
+        listings.getListingWorkspace(trx, params.listingId),
       );
-      return reply.code(200).send({ listing: presentListing(listing) });
+      return reply.code(200).send({
+        listing: presentListing(workspace.listing),
+        facts: presentFacts(workspace.facts),
+        draft: workspace.draft === null ? null : presentDraft(workspace.draft),
+      });
     },
   );
 
@@ -166,6 +276,58 @@ export function registerSellerListingRoutes(
         ),
       );
       return reply.code(200).send({ listing: presentListing(listing) });
+    },
+  );
+
+  // PUT: the body is the seller's complete statement of the facts (D-21 rule 7), so the resource
+  // after the request is exactly the body, whatever it held before.
+  app.put(
+    '/listings/:listingId/facts',
+    {
+      bodyLimit: COPY_BODY_LIMIT,
+      config: { authorization: 'seller-session', declaration: SELLER_LISTING_DECLARATIONS.replaceFacts },
+    },
+    async (request, reply) => {
+      const token = provenToken(request, cookieName);
+      const key = requiredIdempotencyKey(request);
+      const params = ListingParams.parse(request.params);
+      const body = ReplaceFactsBody.parse(request.body);
+      const result = await options.auth.withSellerSession(token, (trx, principal) =>
+        listings.replaceFacts(
+          trx,
+          commandContext({ sellerId: principal.sellerId, requestId: request.id, idempotencyKey: key }),
+          { listingId: params.listingId, expectedRowVersion: body.expectedRowVersion, facts: body.facts },
+        ),
+      );
+      return reply
+        .code(200)
+        .send({ listing: presentListing(result.listing), facts: presentFacts(result.facts) });
+    },
+  );
+
+  // PUT: the body is the seller's complete current copy; the domain appends an immutable version
+  // for it (DM-06) rather than editing one, and answers with the version that now carries it.
+  app.put(
+    '/listings/:listingId/draft',
+    {
+      bodyLimit: COPY_BODY_LIMIT,
+      config: { authorization: 'seller-session', declaration: SELLER_LISTING_DECLARATIONS.saveDraft },
+    },
+    async (request, reply) => {
+      const token = provenToken(request, cookieName);
+      const key = requiredIdempotencyKey(request);
+      const params = ListingParams.parse(request.params);
+      const body = SaveDraftBody.parse(request.body);
+      const result = await options.auth.withSellerSession(token, (trx, principal) =>
+        listings.saveSellerDraft(
+          trx,
+          commandContext({ sellerId: principal.sellerId, requestId: request.id, idempotencyKey: key }),
+          { listingId: params.listingId, ...body },
+        ),
+      );
+      return reply
+        .code(200)
+        .send({ listing: presentListing(result.listing), draft: presentDraft(result.version) });
     },
   );
 }
