@@ -409,12 +409,6 @@ function requireEditable(listing: ListingRecord, attempted: string): void {
   }
 }
 
-export interface ListingFactsResult {
-  listing: ListingRecord;
-  /** The seller-provided fact set after the command, sorted by key; absence is unknown (D-10). */
-  facts: content.ProductFactRecord[];
-}
-
 export interface SellerDraftResult {
   listing: ListingRecord;
   /** The version the save produced, or the unchanged predecessor when the save was a no-op. */
@@ -453,16 +447,18 @@ export const ReplaceFactsInputSchema = z.strictObject({
  * retained nowhere), and equal keys are left alone. A change increments the row version once and
  * writes LISTING_FACTS_CHANGED with the sorted keys set and cleared, their counts and both row
  * versions, never a value; an identical statement is a no-op with no write and no event that still
- * consumes the key. The receipt stores the listing record and the resulting keys only, so a replay
- * returns the stored record with the listing's seller-provided facts re-read (rule 15).
+ * consumes the key. The outcome is the listing record alone (D-21 correction of 2026-09-05): facts
+ * are mutable, so a replay that re-read them could pair an old response with a later fact set.
+ * The receipt stores that record and nothing of the facts, and a replay returns it as stored; the
+ * current facts are read through the workspace, never through a replay.
  */
 export async function replaceFacts(
   trx: TenantTransaction,
   ctx: CommandContext,
   input: { listingId: string; expectedRowVersion: number; facts: content.SellerFacts },
-): Promise<ListingFactsResult> {
+): Promise<ListingRecord> {
   const facts = content.SellerFactsSchema.parse(input.facts);
-  const outcome = await audit.runIdempotent<ListingFactsResult>(trx, ctx, {
+  const outcome = await audit.runIdempotent<ListingRecord>(trx, ctx, {
     command: 'listing.replace_facts',
     payload: { listingId: input.listingId, expectedRowVersion: input.expectedRowVersion, facts },
     eventType: 'LISTING_FACTS_CHANGED',
@@ -473,11 +469,11 @@ export async function replaceFacts(
       if (listing.rowVersion !== input.expectedRowVersion) throw new ConcurrentModificationError('listing');
       const result = await content.replaceSellerFacts(trx, ctx, { listingId: listing.id, facts });
       if (result.setKeys.length === 0 && result.clearedKeys.length === 0) {
-        return { value: { listing, facts: result.facts }, subjectId: listing.id, changed: false };
+        return { value: listing, subjectId: listing.id, changed: false };
       }
       const updated = await updateListingRow(trx, ctx, listing.id, input.expectedRowVersion, {});
       return {
-        value: { listing: updated, facts: result.facts },
+        value: updated,
         subjectId: updated.id,
         ...(updated.currentPolicyVersionId !== null
           ? { policyVersionId: updated.currentPolicyVersionId }
@@ -492,11 +488,8 @@ export async function replaceFacts(
         },
       };
     },
-    serialize: ({ listing, facts: stored }) => ({ listing, factKeys: stored.map((f) => f.key) }),
-    revive: async (stored) => {
-      const listing = reviveListing(stored);
-      return { listing, facts: await content.listFacts(trx, listing.id) };
-    },
+    serialize: storeListing,
+    revive: reviveListing,
   });
   return outcome.value;
 }
@@ -516,12 +509,15 @@ export type SaveSellerDraftInput = z.input<typeof SaveSellerDraftInputSchema>;
  * (LIST-101, LIST-108 path). The listing row is locked, must be DRAFT or EXPIRED and must carry
  * the row version the seller read; the cited predecessor must be the listing's latest version,
  * or null when none exists, so a stale or unrelated predecessor is refused before any write; every
- * structured detail must be a recorded seller fact (INV-12). Copy identical to the predecessor is a
- * no-op with no version, no row-version change and no event that still consumes the key. A change
- * inserts exactly one version with source_version_id set to the predecessor (LIST-042), increments
- * the row version once and writes LISTING_CONTENT_DRAFTED with identifiers and versions only. The
- * receipt stores the listing record and the version identifier; the immutable version is re-read
- * on replay. Nothing rewrites, expands or generates the seller's words (LIST-006, D-12).
+ * structured detail must be a recorded seller fact (INV-12). In DRAFT, copy identical to the
+ * predecessor is a no-op with no version, no row-version change and no event that still consumes
+ * the key. In EXPIRED there is no no-op (D-21 correction of 2026-09-05): SM-L-06 requires a new
+ * version before a relist, so an intentional save creates one even when the words are unchanged.
+ * A save that creates inserts exactly one version with source_version_id set to the predecessor
+ * (LIST-042), increments the row version once and writes LISTING_CONTENT_DRAFTED with identifiers
+ * and versions only. The receipt stores the listing record and that version's identifier, and a
+ * replay re-reads that exact immutable version, never the latest. Nothing rewrites, expands or
+ * generates the seller's words (LIST-006, D-12).
  */
 export async function saveSellerDraft(
   trx: TenantTransaction,
@@ -548,7 +544,7 @@ export async function saveSellerDraft(
       if (listing.rowVersion !== expectedRowVersion) throw new ConcurrentModificationError('listing');
       const latest = await content.getLatestVersion(trx, listing.id);
       if ((latest?.id ?? null) !== sourceVersionId) throw new ConcurrentModificationError('content_version');
-      if (latest !== undefined && content.carriesSameCopy(latest, draft)) {
+      if (listing.status === 'DRAFT' && latest !== undefined && content.carriesSameCopy(latest, draft)) {
         return { value: { listing, version: latest }, subjectId: listing.id, changed: false };
       }
       const version = await content.createSellerDraft(trx, ctx, {

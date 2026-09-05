@@ -27,7 +27,6 @@ export {
   type CloseListingResult,
   type CreateListingWithItemInput,
   type InventoryItemRecord,
-  type ListingFactsResult,
   type ListingRecord,
   type ListingWorkspace,
   type MarkListedResult,

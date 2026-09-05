@@ -850,3 +850,44 @@ this can be met by an unaudited, un-receipted write.
 saves. `Q-09`, `Q-10` and `Q-11` remain open. Slice 0 remains deferred, incomplete and unpassed
 (D-18). No enhancement, approval, publication, buyer surface, image upload, listing
 enumeration, pricing or acquisition-cost editing is introduced.
+
+**Correction (2026-09-05).** Two of the rules above were found inconsistent with `OPS-731` and
+`SM-L-06` by the review of the first implementation, and are corrected here. The original text
+stands as the record of what was first accepted; this correction governs. It is a consistency
+repair, not a new product feature and not a new decision.
+
+1. **Draft no-op in `DRAFT` only (rule 14).** In `DRAFT`, saving content identical to the
+   current seller draft, the latest version, remains a no-op: no new version, no row-version
+   increment, no audit event, and the key is consumed with a stable receipt.
+2. **`EXPIRED` creates a version even for identical words (rules 13 and 14).** In `EXPIRED`, an
+   authenticated, intentional draft save against the current predecessor creates a new
+   immutable `SELLER_DRAFT` version even when its title, summary, description and structured
+   details are identical to the predecessor's: `source_version_id` references the previous
+   latest version, the listing row version increments once, `LISTING_CONTENT_DRAFTED` is
+   emitted once, the idempotency receipt is stored once, and an exact replay creates no
+   additional version. The listing stays `EXPIRED`; approval and relisting remain separate
+   seller actions.
+3. **Why the exception.** `SM-L-06` and `OPS-216` require a new content version, created and
+   explicitly approved after the previous publication, before an `EXPIRED` listing can be
+   relisted (migration `0006`, `LS007`). A seller whose wording is still correct must not be
+   forced into a meaningless textual change to obtain that version: the identity of the version
+   is consequential even when the words are unchanged.
+4. **Replay never reads mutable facts (rule 15).** An exact replay must return the original
+   response and must never reconstruct it by reading the current facts, which a later
+   replacement may have changed. The first implementation re-read the seller-provided facts on
+   replay, so a replayed key could pair its stored listing outcome with a later fact set; that
+   is a violation of `OPS-731` and is removed.
+5. **Raw facts stay out of receipts (rules 15, 18 and 19).** The repair is not to store fact
+   values in the receipt: a receipt is retained past a fact's life (`OPS-733` follow-up) and
+   would otherwise keep a cleared value.
+6. **The fact-mutation response is the listing only.** `PUT /seller/listings/:listingId/facts`
+   answers `200 { listing }`, the stable seller-safe listing record the command already
+   produces, and its receipt stores exactly that outcome. The current facts are retrieved
+   through the read-only workspace `GET /seller/listings/:listingId`, which continues to answer
+   `{ listing, facts, draft }`. The draft save may keep answering `{ listing, draft }` only
+   because its receipt names the immutable version it created and a replay reads that exact
+   version, never the latest.
+
+Rules 1 to 12, 16 to 20 and the **Why consequential** and **Unchanged** paragraphs are not
+affected. Migrations `0001` to `0011` are not modified by this correction; no schema change is
+needed. Slice 0 remains deferred, incomplete and unpassed (D-18).

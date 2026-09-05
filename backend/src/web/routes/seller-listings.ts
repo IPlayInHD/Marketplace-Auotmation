@@ -191,7 +191,7 @@ export const SELLER_LISTING_DECLARATIONS = {
     tenantSource: 'session',
     classification: 'consequential',
     idempotency:
-      'Idempotency-Key required (client UUID); exact replay returns the stored listing with the seller-provided facts re-read; an identical statement is a no-op that still consumes the key',
+      'Idempotency-Key required (client UUID); exact replay returns the stored listing byte for byte and never reads the current facts; an identical statement is a no-op that still consumes the key',
     audit:
       'LISTING_FACTS_CHANGED on change with the sorted keys set and cleared, their counts and both row versions, never a value, in the same transaction; none for the no-op',
     failure:
@@ -207,7 +207,7 @@ export const SELLER_LISTING_DECLARATIONS = {
     tenantSource: 'session',
     classification: 'consequential',
     idempotency:
-      'Idempotency-Key required (client UUID); exact replay returns the stored listing and re-reads the immutable version; copy identical to the predecessor is a no-op that still consumes the key',
+      'Idempotency-Key required (client UUID); exact replay returns the stored listing and re-reads the exact immutable version it names, never the latest; in DRAFT copy identical to the predecessor is a no-op that still consumes the key; in EXPIRED every valid save creates a version (SM-L-06)',
     audit:
       'LISTING_CONTENT_DRAFTED on change with the new version identifier and number, the predecessor identifier when present and both row versions, never a word of copy, in the same transaction; none for the no-op',
     failure:
@@ -280,7 +280,7 @@ export function registerSellerListingRoutes(
   );
 
   // PUT: the body is the seller's complete statement of the facts (D-21 rule 7), so the resource
-  // after the request is exactly the body, whatever it held before.
+  // after the request is exactly the body, whatever it held before. The answer is the listing.
   app.put(
     '/listings/:listingId/facts',
     {
@@ -292,16 +292,16 @@ export function registerSellerListingRoutes(
       const key = requiredIdempotencyKey(request);
       const params = ListingParams.parse(request.params);
       const body = ReplaceFactsBody.parse(request.body);
-      const result = await options.auth.withSellerSession(token, (trx, principal) =>
+      const listing = await options.auth.withSellerSession(token, (trx, principal) =>
         listings.replaceFacts(
           trx,
           commandContext({ sellerId: principal.sellerId, requestId: request.id, idempotencyKey: key }),
           { listingId: params.listingId, expectedRowVersion: body.expectedRowVersion, facts: body.facts },
         ),
       );
-      return reply
-        .code(200)
-        .send({ listing: presentListing(result.listing), facts: presentFacts(result.facts) });
+      // The stable listing outcome only (D-21 correction): facts are mutable, so the response, the
+      // receipt and every replay carry none; the workspace GET is where the current facts are read.
+      return reply.code(200).send({ listing: presentListing(listing) });
     },
   );
 

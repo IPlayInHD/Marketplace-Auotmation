@@ -40,8 +40,9 @@ const tenantContextCalls = vi.mocked(establishTenantContext);
 // workspace both produce. Every account, item, fact and word below is synthetic (D-18, DATA-110).
 // Proofs: full replacement with absence as the unknown state, blank values never stored, provenance
 // fixed, no-ops that consume their key, exact replay, conflicts and stale versions without mutation,
-// predecessor lineage, D-10 coverage, seller text returned verbatim, DRAFT and EXPIRED allowed and
-// every other state refused, tenant isolation indistinguishable from absence (AUTH-221), refusals
+// predecessor lineage, D-10 coverage, seller text returned verbatim, replay of a fact key after
+// later replacements without reading the mutable facts, the EXPIRED save that creates a version
+// even for identical words (SM-L-06), DRAFT and EXPIRED allowed and every other state refused, tenant isolation indistinguishable from absence (AUTH-221), refusals
 // without tenant context, rollback of every write together, no tenant context on a pooled
 // connection, and no value, word, identity or secret in events, receipts, responses or logs.
 
@@ -132,9 +133,9 @@ interface DraftBody {
 }
 interface FactsBody {
   listing: { id: string; rowVersion: number; status: string };
-  facts: Record<string, { value: string; provenance: string; suppliedAt: string }>;
 }
 interface WorkspaceBody extends FactsBody {
+  facts: Record<string, { value: string; provenance: string; suppliedAt: string }>;
   draft: DraftBody['draft'] | null;
 }
 
@@ -377,13 +378,15 @@ describe('Seller workspace routes (Slice 1f, D-21)', () => {
     const first = await putFacts(sessionA, key, made.id, factsOf(FULL_FACTS, 1));
     expect(first.statusCode).toBe(200);
     const body = first.json<FactsBody>();
-    expect(Object.keys(body).sort()).toEqual(['facts', 'listing']);
+    expect(Object.keys(body).sort()).toEqual(['listing']);
     expect(Object.keys(body.listing).sort()).toEqual(LISTING_KEYS);
     expect(body.listing).toMatchObject({ id: made.id, rowVersion: 2, status: 'DRAFT' });
-    expect(Object.keys(body.facts).sort()).toEqual(SORTED_KEYS);
+    // The current facts are read from the workspace, keyed by canonical key.
+    const workspace = (await read(sessionA.token, made.id)).json<WorkspaceBody>();
+    expect(Object.keys(workspace.facts).sort()).toEqual(SORTED_KEYS);
     for (const k of PRODUCT_FACT_KEYS) {
-      expect(body.facts[k]).toMatchObject({ value: FULL_FACTS[k], provenance: 'SELLER_PROVIDED_FACT' });
-      expect(body.facts[k]?.suppliedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      expect(workspace.facts[k]).toMatchObject({ value: FULL_FACTS[k], provenance: 'SELLER_PROVIDED_FACT' });
+      expect(workspace.facts[k]?.suppliedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     }
     const rows = (await factRows(sellerA.sellerId)).filter((r) => r.listing_id === made.id);
     expect(rows.map((r) => [r.key, r.value, r.provenance])).toEqual(
@@ -403,7 +406,7 @@ describe('Seller workspace routes (Slice 1f, D-21)', () => {
     const receipt = (await receipts(sellerA.sellerId)).find((r) => r.idempotency_key === key);
     expect(receipt).toMatchObject({ command: 'listing.replace_facts', subject_id: made.id });
     expect(receipt?.request_id).toBe(changed[0]?.request_id);
-    expect(receipt?.outcome).toMatchObject({ factKeys: SORTED_KEYS });
+    expect(Object.keys(receipt?.outcome ?? {})).toEqual(['listing']);
     expectNoValues(JSON.stringify(receipt?.outcome), 'receipt');
     expectNoValues(JSON.stringify(changed[0]?.summary), 'event');
     const state = await snapshot(sellerA.sellerId);
@@ -421,7 +424,9 @@ describe('Seller workspace routes (Slice 1f, D-21)', () => {
     const noOp = await putFacts(sessionA, noOpKey, made.id, factsOf(padded, 2));
     expect(noOp.statusCode).toBe(200);
     expect(noOp.json<FactsBody>().listing.rowVersion).toBe(2);
-    expect(noOp.json<FactsBody>().facts['name']?.value).toBe(FULL_FACTS.name);
+    expect((await read(sessionA.token, made.id)).json<WorkspaceBody>().facts['name']?.value).toBe(
+      FULL_FACTS.name,
+    );
     const afterNoOp = await snapshot(sellerA.sellerId);
     expect(afterNoOp.facts).toEqual(state.facts);
     expect(afterNoOp.listings).toEqual(state.listings);
@@ -445,7 +450,12 @@ describe('Seller workspace routes (Slice 1f, D-21)', () => {
     const partial = await putFacts(sessionA, randomUUID(), made.id, factsOf(kept, 2));
     expect(partial.statusCode).toBe(200);
     expect(partial.json<FactsBody>().listing.rowVersion).toBe(3);
-    expect(Object.keys(partial.json<FactsBody>().facts).sort()).toEqual(['brand', 'condition', 'name']);
+    expect(Object.keys(partial.json<FactsBody>())).toEqual(['listing']);
+    expect(Object.keys((await read(sessionA.token, made.id)).json<WorkspaceBody>().facts).sort()).toEqual([
+      'brand',
+      'condition',
+      'name',
+    ]);
     const partialRows = (await factRows(sellerA.sellerId)).filter((r) => r.listing_id === made.id);
     expect(partialRows).toEqual(fullRows.filter((r) => r.key in kept));
     const cleared = (await eventsOf(sellerA.sellerId, made.id, 'LISTING_FACTS_CHANGED')).at(-1);
@@ -470,7 +480,10 @@ describe('Seller workspace routes (Slice 1f, D-21)', () => {
     const blank = await putFacts(sessionA, randomUUID(), made.id, factsOf(blanks, 3));
     expect(blank.statusCode).toBe(200);
     expect(blank.json<FactsBody>().listing.rowVersion).toBe(4);
-    expect(Object.keys(blank.json<FactsBody>().facts).sort()).toEqual(['brand', 'condition']);
+    expect(Object.keys((await read(sessionA.token, made.id)).json<WorkspaceBody>().facts).sort()).toEqual([
+      'brand',
+      'condition',
+    ]);
     expect(
       (await factRows(sellerA.sellerId)).filter((r) => r.listing_id === made.id).map((r) => r.key),
     ).toEqual(['brand', 'condition']);
@@ -490,7 +503,8 @@ describe('Seller workspace routes (Slice 1f, D-21)', () => {
     // Empty: every seller-provided fact is unknown again; the deleted values are retained nowhere.
     const empty = await putFacts(sessionA, randomUUID(), made.id, factsOf({}, 4));
     expect(empty.statusCode).toBe(200);
-    expect(empty.json<FactsBody>()).toMatchObject({ listing: { rowVersion: 5 }, facts: {} });
+    expect(Object.keys(empty.json<FactsBody>())).toEqual(['listing']);
+    expect(empty.json<FactsBody>().listing.rowVersion).toBe(5);
     expect((await factRows(sellerA.sellerId)).filter((r) => r.listing_id === made.id)).toEqual([]);
     expect((await eventsOf(sellerA.sellerId, made.id, 'LISTING_FACTS_CHANGED')).at(-1)?.summary).toEqual({
       set_keys: [],
@@ -522,7 +536,9 @@ describe('Seller workspace routes (Slice 1f, D-21)', () => {
       factsOf({ brand: 'Fixture Brand B' }, 6),
     );
     expect(revalued.statusCode).toBe(200);
-    expect(revalued.json<FactsBody>().facts['brand']?.value).toBe('Fixture Brand B');
+    expect((await read(sessionA.token, made.id)).json<WorkspaceBody>().facts['brand']?.value).toBe(
+      'Fixture Brand B',
+    );
     expect((await eventsOf(sellerA.sellerId, made.id, 'LISTING_FACTS_CHANGED')).at(-1)?.summary).toEqual({
       set_keys: ['brand'],
       cleared_keys: [],
@@ -896,6 +912,198 @@ describe('Seller workspace routes (Slice 1f, D-21)', () => {
     expect((await versionRows(sellerA.sellerId)).filter((r) => r.listing_id === made.id)).toHaveLength(1);
   });
 
+  it('replays a fact key byte-identically after later replacements, never reading the current facts, so the response carries no fact value and the workspace still shows the latest set', async () => {
+    const made = await create(sessionA);
+    const setA = { name: FULL_FACTS.name, brand: FULL_FACTS.brand };
+    const setB = { name: 'Fixture name after B', colour: FULL_FACTS.colour };
+    const keyA = randomUUID();
+    const first = await putFacts(sessionA, keyA, made.id, factsOf(setA, 1));
+    expect(first.statusCode).toBe(200);
+    expect(first.json<FactsBody>().listing).toMatchObject({ id: made.id, rowVersion: 2 });
+    // A no-op statement and a clearing statement, each under its own key, then a later change.
+    const keyNoOp = randomUUID();
+    const noOp = await putFacts(sessionA, keyNoOp, made.id, factsOf(setA, 2));
+    expect(noOp.statusCode).toBe(200);
+    expect(noOp.json<FactsBody>().listing.rowVersion).toBe(2);
+    const keyClear = randomUUID();
+    const cleared = await putFacts(sessionA, keyClear, made.id, factsOf({}, 2));
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.json<FactsBody>().listing.rowVersion).toBe(3);
+    const keyB = randomUUID();
+    const second = await putFacts(sessionA, keyB, made.id, factsOf(setB, 3));
+    expect(second.statusCode).toBe(200);
+    expect(second.json<FactsBody>().listing.rowVersion).toBe(4);
+    const state = await snapshot(sellerA.sellerId);
+    const currentFacts = async () =>
+      Object.fromEntries(
+        Object.entries((await read(sessionA.token, made.id)).json<WorkspaceBody>().facts).map(([k, v]) => [
+          k,
+          v.value,
+        ]),
+      );
+    expect(await currentFacts()).toEqual(setB);
+    // Every older key replays its own original response, byte for byte, and changes nothing:
+    // set B stays current, no write, no event, no receipt, no row-version movement.
+    for (const [label, key, payload, original] of [
+      ['key A after B', keyA, factsOf(setA, 1), first],
+      ['no-op key after B', keyNoOp, factsOf(setA, 2), noOp],
+      ['clearing key after B', keyClear, factsOf({}, 2), cleared],
+      ['key B itself', keyB, factsOf(setB, 3), second],
+    ] as const) {
+      const replay = await putFacts(sessionA, key, made.id, payload);
+      expect(replay.statusCode, label).toBe(200);
+      expect(replay.body, label).toBe(original.body);
+      expect(await snapshot(sellerA.sellerId), label).toEqual(state);
+      expect(await currentFacts(), label).toEqual(setB);
+    }
+    // The mutation response is the stable listing outcome only: no fact value, no fact key.
+    expect(Object.keys(first.json<Record<string, unknown>>()).sort()).toEqual(['listing']);
+    expectNoValues(first.body, 'fact response A');
+    // The receipts hold the stable listing outcome and nothing of either set.
+    const replayed: string[] = [keyA, keyNoOp, keyClear, keyB];
+    const mine = (await receipts(sellerA.sellerId)).filter((r) => replayed.includes(r.idempotency_key));
+    expect(mine).toHaveLength(4);
+    for (const r of mine) {
+      expect(Object.keys(r.outcome).sort(), r.idempotency_key).toEqual(['listing']);
+      const text = JSON.stringify(r.outcome);
+      expectNoValues(text, `receipt ${r.idempotency_key}`);
+      for (const v of [...Object.values(setA), ...Object.values(setB)]) expect(text).not.toContain(v);
+    }
+  });
+
+  it('creates a new immutable version for an identical draft save on an EXPIRED listing, citing the predecessor, and replays that exact version after later saves while the listing stays EXPIRED', async () => {
+    const db = harness.runtime.db;
+    const published = await publishListing(db, sellerA.sellerId);
+    await withTenant(db, sellerA.sellerId, (trx) =>
+      listings.expireListing(trx, command(sellerA.sellerId, 'expire'), {
+        listingId: published.listed.listing.id,
+        expectedRowVersion: published.listed.listing.rowVersion,
+      }),
+    );
+    const id = published.listed.listing.id;
+    const before = (await read(sessionA.token, id)).json<WorkspaceBody>();
+    expect(before.listing.status).toBe('EXPIRED');
+    expect(before.draft).toMatchObject({
+      versionNumber: 1,
+      status: 'APPROVED',
+      id: published.built.versionId,
+    });
+    const statusEvents = async () =>
+      (await events(sellerA.sellerId)).filter(
+        (e) => e.subject_id === id && e.event_type === 'LISTING_STATUS_CHANGED',
+      );
+    const transitions = await statusEvents();
+    const identical = { ...COPY, structuredDetails: { ...FIXTURE.facts } };
+    expect(before.draft).toMatchObject({
+      title: COPY.title,
+      summary: COPY.summary,
+      description: COPY.description,
+      structuredDetails: FIXTURE.facts,
+    });
+
+    // Identical words, EXPIRED listing: one new SELLER_DRAFT version, not a no-op (SM-L-06).
+    const keyE = randomUUID();
+    const saved = await putDraft(
+      sessionA,
+      keyE,
+      id,
+      draftOf(before.listing.rowVersion, before.draft?.id ?? null, identical),
+    );
+    expect(saved.statusCode).toBe(200);
+    const v2 = saved.json<DraftBody>();
+    expect(v2.listing).toMatchObject({ status: 'EXPIRED', rowVersion: before.listing.rowVersion + 1 });
+    expect(v2.draft).toMatchObject({
+      versionNumber: 2,
+      status: 'SELLER_DRAFT',
+      provenance: 'SELLER_PROVIDED_FACT',
+      sourceVersionId: before.draft?.id,
+      title: COPY.title,
+      summary: COPY.summary,
+      description: COPY.description,
+      structuredDetails: FIXTURE.facts,
+    });
+    expect(v2.draft.id).not.toBe(before.draft?.id);
+    const drafted = (await events(sellerA.sellerId)).filter(
+      (e) => e.subject_id === id && e.event_type === 'LISTING_CONTENT_DRAFTED',
+    );
+    expect(drafted).toHaveLength(1);
+    expect(drafted[0]?.summary).toEqual({
+      content_version_id: v2.draft.id,
+      version_number: 2,
+      source_version_id: before.draft?.id,
+      previous_row_version: before.listing.rowVersion,
+      row_version: before.listing.rowVersion + 1,
+    });
+    const afterSave = await snapshot(sellerA.sellerId);
+    expect(afterSave.versions.filter((v) => v.listing_id === id)).toHaveLength(2);
+    expect(afterSave.receipts.filter((r) => r.idempotency_key === keyE)).toHaveLength(1);
+
+    // Exact replay: the same version, nothing duplicated.
+    const replay = await putDraft(
+      sessionA,
+      keyE,
+      id,
+      draftOf(before.listing.rowVersion, before.draft?.id ?? null, identical),
+    );
+    expect(replay.statusCode).toBe(200);
+    expect(replay.body).toBe(saved.body);
+    expect(await snapshot(sellerA.sellerId)).toEqual(afterSave);
+
+    // A stale predecessor in EXPIRED is the established conflict, and mutates nothing.
+    const stale = await putDraft(
+      sessionA,
+      randomUUID(),
+      id,
+      draftOf(v2.listing.rowVersion, before.draft?.id ?? null, identical),
+    );
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toEqual({ error: 'stale_row_version' });
+    expect(await snapshot(sellerA.sellerId)).toEqual(afterSave);
+
+    // A later revision, then a replay of the older key: the older immutable version, byte for
+    // byte, while the latest stays the revision.
+    const revised = await putDraft(
+      sessionA,
+      randomUUID(),
+      id,
+      draftOf(v2.listing.rowVersion, v2.draft.id, { ...identical, description: REVISED_DESCRIPTION }),
+    );
+    expect(revised.statusCode).toBe(200);
+    const v3 = revised.json<DraftBody>();
+    expect(v3.draft).toMatchObject({
+      versionNumber: 3,
+      sourceVersionId: v2.draft.id,
+      description: REVISED_DESCRIPTION,
+    });
+    const afterRevision = await snapshot(sellerA.sellerId);
+    const older = await putDraft(
+      sessionA,
+      keyE,
+      id,
+      draftOf(before.listing.rowVersion, before.draft?.id ?? null, identical),
+    );
+    expect(older.statusCode).toBe(200);
+    expect(older.body).toBe(saved.body);
+    expect(older.json<DraftBody>().draft.versionNumber).toBe(2);
+    expect(await snapshot(sellerA.sellerId)).toEqual(afterRevision);
+    const latest = (await read(sessionA.token, id)).json<WorkspaceBody>();
+    expect(latest.draft).toEqual(v3.draft);
+    expect(latest.listing).toMatchObject({ status: 'EXPIRED', rowVersion: before.listing.rowVersion + 2 });
+    // The listing never left EXPIRED: no transition, no approval, no publication.
+    expect(await statusEvents()).toEqual(transitions);
+    expect(afterRevision.versions.filter((v) => v.listing_id === id).map((v) => v.status)).toEqual([
+      'APPROVED',
+      'SELLER_DRAFT',
+      'SELLER_DRAFT',
+    ]);
+    // Approval events name the version they approved: only the fixture's first version was.
+    const versionIds = [published.built.versionId, v2.draft.id, v3.draft.id];
+    const approvals = (await events(sellerA.sellerId)).filter(
+      (e) => e.event_type === 'LISTING_CONTENT_APPROVED' && versionIds.includes(e.subject_id),
+    );
+    expect(approvals.map((e) => e.subject_id)).toEqual([published.built.versionId]);
+  });
+
   it('reads the workspace with the listing, the facts keyed by canonical key with absence as unknown, and the latest version, creating no event and no receipt', async () => {
     const made = await create(sessionA);
     const fresh = (await read(sessionA.token, made.id)).json<WorkspaceBody>();
@@ -1049,7 +1257,9 @@ describe('Seller workspace routes (Slice 1f, D-21)', () => {
       status: 'EXPIRED',
       rowVersion: ws.listing.rowVersion + 1,
     });
-    expect(facts.json<FactsBody>().facts['size']?.value).toBe('56 cm');
+    expect((await read(sessionA.token, ws.listing.id)).json<WorkspaceBody>().facts['size']?.value).toBe(
+      '56 cm',
+    );
     const draft = await putDraft(
       sessionA,
       randomUUID(),

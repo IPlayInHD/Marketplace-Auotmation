@@ -174,7 +174,7 @@ a seller's words (`LIST-006`, D-12).
 
 | Route                                   | Declaration                                                                                                                                          | Request                                                                                                                                                                                                                                                                                             | Success                         |
 | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| `PUT /seller/listings/:listingId/facts` | seller · listing · replace_facts · seller-session · tenant from session · consequential · `Idempotency-Key` required · `LISTING_FACTS_CHANGED`       | `{ "expectedRowVersion": n, "facts": { "<key>": "text", ... } }` over the eleven `LIST-002` keys `name`, `brand`, `model`, `size`, `colour`, `condition`, `included_items`, `defects`, `age`, `usage_history`, `specifications`; values trimmed, at most 2000 characters; `{}` is a valid statement | `200 { listing, facts }`        |
+| `PUT /seller/listings/:listingId/facts` | seller · listing · replace_facts · seller-session · tenant from session · consequential · `Idempotency-Key` required · `LISTING_FACTS_CHANGED`       | `{ "expectedRowVersion": n, "facts": { "<key>": "text", ... } }` over the eleven `LIST-002` keys `name`, `brand`, `model`, `size`, `colour`, `condition`, `included_items`, `defects`, `age`, `usage_history`, `specifications`; values trimmed, at most 2000 characters; `{}` is a valid statement | `200 { listing }`               |
 | `PUT /seller/listings/:listingId/draft` | seller · listing · save_seller_draft · seller-session · tenant from session · consequential · `Idempotency-Key` required · `LISTING_CONTENT_DRAFTED` | `{ "expectedRowVersion": n, "sourceVersionId": uuid or null, "title": text, "summary"?: text, "description"?: text, "structuredDetails"?: { "<key>": "text" } }`; title 1 to 200, summary to 1000, description to 10 000, details over the fact keys                                                | `200 { listing, draft }`        |
 | `GET /seller/listings/:listingId`       | seller · listing · read_workspace · seller-session · tenant from session · read-only · no key · no event                                             | none                                                                                                                                                                                                                                                                                                | `200 { listing, facts, draft }` |
 
@@ -189,9 +189,11 @@ omitted, leaves equal keys untouched (their `supplied_at` stands), increments `r
 and writes `LISTING_FACTS_CHANGED` with `set_keys`, `cleared_keys`, `set_count`, `cleared_count`,
 `previous_row_version` and `row_version`, never a value. An identical statement, whitespace and
 blank keys aside, is a no-op: no write, no `row_version` change, no event, key consumed and its
-outcome stored. `facts` in every response is keyed by fact key,
-`{ "<key>": { "value", "provenance": "SELLER_PROVIDED_FACT", "suppliedAt" } }`, with unknown keys
-absent. The condition ladder of `ai/LISTING_ENHANCEMENT.md` §6.4 validates enhancement output,
+outcome stored. The mutation answers `200 { listing }`, the stable listing record only, and
+never a fact (D-21 correction of 2026-09-05): the current facts are read from the workspace
+`GET`, keyed by fact key, `{ "<key>": { "value", "provenance": "SELLER_PROVIDED_FACT",
+"suppliedAt" } }`, with unknown keys absent. The condition ladder of
+`ai/LISTING_ENHANCEMENT.md` §6.4 validates enhancement output,
 not seller input: the seller may state any condition text.
 
 **Drafts (D-21 rules 10 to 15).** Content versions are immutable (`DM-06`, `OPS-706`), so a save
@@ -203,8 +205,12 @@ detail to be a recorded seller fact (`INV-12`, `400 bad_request` otherwise), and
 `SELLER_DRAFT` version with `SELLER_PROVIDED_FACT` provenance and `source_version_id` set to the
 predecessor (`LIST-042`), incrementing `row_version` once and writing `LISTING_CONTENT_DRAFTED`
 with `content_version_id`, `version_number`, `source_version_id` when present,
-`previous_row_version` and `row_version`, never a word of copy. Copy identical to the
-predecessor, trimmed, is a no-op that consumes the key and answers the predecessor. `draft` in
+`previous_row_version` and `row_version`, never a word of copy. In `DRAFT`, copy identical to
+the predecessor, trimmed, is a no-op that consumes the key and answers the predecessor. In
+`EXPIRED` there is no no-op (D-21 correction of 2026-09-05): `SM-L-06` requires a new version
+before a relist, so an intentional save against the current predecessor creates one even when
+the words are unchanged, with the same lineage, row-version increment, event and receipt as any
+other save, and the listing stays `EXPIRED`. `draft` in
 every response is `{ id, versionNumber, status, provenance, title, summary, description,
 structuredDetails, sourceVersionId, createdAt, approvedAt }`, the words exactly as stored; the
 approver is the seller id and is not exposed. A blank summary, description or detail is absent,
@@ -223,10 +229,12 @@ seller-approved version before a relist) and refused with `409 invalid_state` in
 
 **Idempotency and receipts.** One `runIdempotent` call per command, one fingerprint over the
 normalised payload (so `{ "name": "" }` and `{}` are the same statement), one receipt. The fact
-receipt stores the listing record and the resulting fact keys; a replay returns the stored record
-with the seller-provided facts re-read, so no receipt holds a value a seller later cleared. The
-draft receipt stores the listing record and the version identifier; a replay re-reads the
-immutable version. The same key with another payload or command is `409 idempotency_conflict`.
+receipt stores the listing record and nothing else; a replay returns it byte for byte and never
+reads the fact collection, which a later replacement may have changed, so no receipt holds a
+value a seller later cleared and no replay pairs an old outcome with newer facts (`OPS-731`). The
+draft receipt stores the listing record and the identifier of the version the save created or
+answered; a replay re-reads that exact immutable version, never the latest. The same key with
+another payload or command is `409 idempotency_conflict`.
 The two `PUT` routes carry a 256 KiB body bound of their own, because eleven facts of 2000
 characters or a 10 000-character description exceed the process-wide 16 KiB limit once encoded;
 the schemas still refuse anything beyond the canonical lengths. Test suite:
