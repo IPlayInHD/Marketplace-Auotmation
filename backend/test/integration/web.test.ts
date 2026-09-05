@@ -1,7 +1,13 @@
 import Fastify from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ROUTE_PREFIXES } from '../../src/web/app.ts';
-import { declaredRoutes, enforceRouteDeclarations } from '../../src/web/authorization.ts';
+import {
+  declaredRoutes,
+  enforceRouteDeclarations,
+  ROUTE_DECLARATION_FIELDS,
+} from '../../src/web/authorization.ts';
+import { SELLER_LISTING_DECLARATIONS } from '../../src/web/routes/seller-listings.ts';
+import { SELLER_AUTH_DECLARATIONS } from '../../src/web/routes/seller.ts';
 import { AUTH_PREFIX, startAuthApp, type AuthApp } from '../helpers/auth.ts';
 import { startDatabase, type TestDatabase } from '../helpers/database.ts';
 
@@ -28,19 +34,81 @@ describe('Web process', () => {
     expect(res.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
   });
 
-  it('registers exactly the six declared seller-authentication routes and no buyer route', async () => {
+  it('registers exactly the nine declared seller routes, each with its complete canonical AUTH-222 declaration, and no buyer route', async () => {
+    const listingPrefix = `${ROUTE_PREFIXES.seller}/listings`;
     expect(declaredRoutes(harness.app)).toEqual([
-      { method: 'POST', url: `${AUTH_PREFIX}/sign-in`, authorization: 'unauthenticated-sign-in' },
-      { method: 'GET', url: `${AUTH_PREFIX}/me`, authorization: 'seller-session' },
-      { method: 'GET', url: `${AUTH_PREFIX}/sessions`, authorization: 'seller-session' },
-      { method: 'POST', url: `${AUTH_PREFIX}/sessions/rotate`, authorization: 'seller-session' },
-      { method: 'POST', url: `${AUTH_PREFIX}/sign-out`, authorization: 'seller-session' },
-      { method: 'POST', url: `${AUTH_PREFIX}/sign-out-all`, authorization: 'seller-session' },
+      {
+        method: 'POST',
+        url: `${AUTH_PREFIX}/sign-in`,
+        authorization: 'unauthenticated-sign-in',
+        declaration: SELLER_AUTH_DECLARATIONS.signIn,
+      },
+      {
+        method: 'GET',
+        url: `${AUTH_PREFIX}/me`,
+        authorization: 'seller-session',
+        declaration: SELLER_AUTH_DECLARATIONS.me,
+      },
+      {
+        method: 'GET',
+        url: `${AUTH_PREFIX}/sessions`,
+        authorization: 'seller-session',
+        declaration: SELLER_AUTH_DECLARATIONS.sessions,
+      },
+      {
+        method: 'POST',
+        url: `${AUTH_PREFIX}/sessions/rotate`,
+        authorization: 'seller-session',
+        declaration: SELLER_AUTH_DECLARATIONS.rotate,
+      },
+      {
+        method: 'POST',
+        url: `${AUTH_PREFIX}/sign-out`,
+        authorization: 'seller-session',
+        declaration: SELLER_AUTH_DECLARATIONS.signOut,
+      },
+      {
+        method: 'POST',
+        url: `${AUTH_PREFIX}/sign-out-all`,
+        authorization: 'seller-session',
+        declaration: SELLER_AUTH_DECLARATIONS.signOutAll,
+      },
+      {
+        method: 'POST',
+        url: listingPrefix,
+        authorization: 'seller-session',
+        declaration: SELLER_LISTING_DECLARATIONS.create,
+      },
+      {
+        method: 'GET',
+        url: `${listingPrefix}/:listingId`,
+        authorization: 'seller-session',
+        declaration: SELLER_LISTING_DECLARATIONS.read,
+      },
+      {
+        method: 'PATCH',
+        url: `${listingPrefix}/:listingId/asking-price`,
+        authorization: 'seller-session',
+        declaration: SELLER_LISTING_DECLARATIONS.setAskingPrice,
+      },
     ]);
+    // Every declaration states every required field, and the tenant never comes from the request.
+    for (const route of declaredRoutes(harness.app)) {
+      for (const field of ROUTE_DECLARATION_FIELDS) {
+        expect(
+          route.declaration[field].trim().length,
+          `${route.method} ${route.url} ${field}`,
+        ).toBeGreaterThan(0);
+      }
+      expect(['none', 'session']).toContain(route.declaration.tenantSource);
+      if (route.authorization === 'seller-session')
+        expect(route.declaration.authentication).toBe('seller-session');
+    }
     for (const url of [
       `${ROUTE_PREFIXES.buyer}/:publicId`,
       `${ROUTE_PREFIXES.buyer}`,
-      `${ROUTE_PREFIXES.seller}/listings`,
+      `${listingPrefix}/:listingId/publish`,
+      `${listingPrefix}/:listingId/status`,
       `${ROUTE_PREFIXES.seller}`,
       `${AUTH_PREFIX}/sign-up`,
       `${AUTH_PREFIX}/reset`,
@@ -50,11 +118,9 @@ describe('Web process', () => {
       expect(harness.app.hasRoute({ method: 'GET', url }), url).toBe(false);
       expect(harness.app.hasRoute({ method: 'POST', url }), url).toBe(false);
     }
-    for (const url of [
-      `${ROUTE_PREFIXES.buyer}/abcdefghijklmnop`,
-      `${ROUTE_PREFIXES.seller}/listings`,
-      '/signup',
-    ]) {
+    expect(harness.app.hasRoute({ method: 'DELETE', url: `${listingPrefix}/:listingId` })).toBe(false);
+    expect(harness.app.hasRoute({ method: 'GET', url: listingPrefix })).toBe(false);
+    for (const url of [`${ROUTE_PREFIXES.buyer}/abcdefghijklmnop`, `${listingPrefix}/x/publish`, '/signup']) {
       const res = await harness.app.inject({ method: 'GET', url });
       expect(res.statusCode, url).toBe(404);
       expect(res.json()).toEqual({ error: 'not_found' });

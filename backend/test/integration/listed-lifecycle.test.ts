@@ -963,7 +963,7 @@ describe('Listed listing lifecycle', () => {
           inventoryItemId: built.inventoryItemId,
         }),
       ),
-    ).rejects.toMatchObject({ code: SQLSTATE.uniqueViolation });
+    ).rejects.toBeInstanceOf(InvalidStateError);
     const cancelled = await cancel(command(sellerA, 'cancel'), listed.listing.id, listed.listing.rowVersion);
     expect(cancelled.listing.status).toBe('CANCELLED');
 

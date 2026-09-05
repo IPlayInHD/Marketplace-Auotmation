@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SQLSTATE } from '../../db/constants.ts';
 import type { TenantTransaction } from '../../db/kysely.ts';
 import { LISTING_STATUSES, type ListingStatus } from '../../db/schema.ts';
 import type { CommandContext, WriteContext } from '../../shared/command.ts';
@@ -177,6 +178,29 @@ async function getListingForUpdate(trx: TenantTransaction, listingId: string): P
   return toListing(row);
 }
 
+/**
+ * The data layer's own answers to a creation the tenant may not make, as typed errors: an
+ * inventory item of another tenant or none (the composite foreign key) is exactly as absent as
+ * a nonexistent one (AUTH-221), and an item that already carries a live listing refuses a second
+ * one (LIST-100 AC2, SM-L-06). Everything else keeps the shared mapping.
+ */
+function mapListingInsertError(err: unknown): unknown {
+  if (typeof err === 'object' && err !== null) {
+    const { code, constraint } = err as { code?: unknown; constraint?: unknown };
+    if (code === SQLSTATE.foreignKeyViolation && constraint === 'listing_item_same_tenant') {
+      return new NotFoundError('inventory_item');
+    }
+    if (code === SQLSTATE.uniqueViolation && constraint === 'listing_one_live_per_item') {
+      return new InvalidStateError(
+        'listing',
+        'live',
+        'be created again while a live listing exists for the item',
+      );
+    }
+  }
+  return mapDatabaseError(err, 'listing');
+}
+
 /** LIST-100: a listing starts in DRAFT (the data layer refuses any other start). */
 export async function createListing(
   trx: TenantTransaction,
@@ -189,12 +213,22 @@ export async function createListing(
     eventType: 'LISTING_CREATED',
     subjectType: 'listing',
     run: async () => {
+      const inventoryItemId = z.uuid().parse(input.inventoryItemId);
+      // AUTH-221: an item of another tenant is invisible under row-level security and answers
+      // exactly like a nonexistent one, before any constraint (which could otherwise tell a
+      // live listing on someone else's item apart from an absent item) is evaluated.
+      const item = await trx
+        .selectFrom('inventory_item')
+        .select('id')
+        .where('id', '=', inventoryItemId)
+        .executeTakeFirst();
+      if (!item) throw new NotFoundError('inventory_item');
       try {
         const row = await trx
           .insertInto('listing')
           .values({
             seller_id: ctx.sellerId,
-            inventory_item_id: z.uuid().parse(input.inventoryItemId),
+            inventory_item_id: inventoryItemId,
             asking_price_minor: null,
             currency: null,
             current_content_version_id: null,
@@ -206,7 +240,7 @@ export async function createListing(
         const listing = toListing(row);
         return { value: listing, subjectId: listing.id, summary: { status: listing.status } };
       } catch (err) {
-        throw mapDatabaseError(err, 'listing');
+        throw mapListingInsertError(err);
       }
     },
     serialize: storeListing,

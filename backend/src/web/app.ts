@@ -10,11 +10,18 @@ import * as auth from '../modules/identity-auth/index.ts';
 import {
   AntiForgeryRefusedError,
   ClientIdentityError,
+  ConcurrentModificationError,
   DomainError,
   IdempotencyConflictError,
   IdempotencyKeyRequiredError,
+  InvalidStateError,
+  ListingNotReadyError,
+  NotFoundError,
   OriginRefusedError,
+  PublicAccessRequiredError,
+  RelistContentRequiredError,
   UnauthenticatedError,
+  ValidationError,
 } from '../shared/errors.ts';
 import { enforceRouteDeclarations } from './authorization.ts';
 import { buyerRouteTree } from './routes/buyer.ts';
@@ -46,6 +53,8 @@ const RESPONSES = {
   forbiddenAntiForgery: { error: 'forbidden_anti_forgery' },
   idempotencyKeyRequired: { error: 'idempotency_key_required' },
   idempotencyConflict: { error: 'idempotency_conflict' },
+  invalidState: { error: 'invalid_state' },
+  staleRowVersion: { error: 'stale_row_version' },
   internal: { error: 'internal' },
 } as const;
 
@@ -84,6 +93,20 @@ export async function buildWebApp(options: WebAppOptions) {
     if (err instanceof IdempotencyKeyRequiredError)
       return reply.code(400).send(RESPONSES.idempotencyKeyRequired);
     if (err instanceof IdempotencyConflictError) return reply.code(409).send(RESPONSES.idempotencyConflict);
+    // Domain refusals, mapped centrally to fixed bodies (AUTH-215, AUTH-221): a record of another
+    // tenant is not found, a stale read is a version conflict, a state-machine refusal is a state
+    // conflict, a schema-level refusal is a bad request. None of them repeats a message.
+    if (err instanceof NotFoundError) return reply.code(404).send(RESPONSES.notFound);
+    if (err instanceof ConcurrentModificationError) return reply.code(409).send(RESPONSES.staleRowVersion);
+    if (
+      err instanceof InvalidStateError ||
+      err instanceof ListingNotReadyError ||
+      err instanceof PublicAccessRequiredError ||
+      err instanceof RelistContentRequiredError
+    ) {
+      return reply.code(409).send(RESPONSES.invalidState);
+    }
+    if (err instanceof ValidationError) return reply.code(400).send(RESPONSES.badRequest);
     if (err instanceof ClientIdentityError) {
       request.log.warn({ reason: err.reason }, 'client identity refused');
       return reply.code(400).send(RESPONSES.badRequest);

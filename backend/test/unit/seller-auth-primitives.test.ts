@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import Fastify from 'fastify';
+import Fastify, { type FastifyInstance } from 'fastify';
 import { describe, expect, it } from 'vitest';
 import * as auth from '../../src/modules/identity-auth/index.ts';
 import { declaredRoutes, enforceRouteDeclarations } from '../../src/web/authorization.ts';
@@ -328,28 +328,58 @@ describe('Progressive delay policy (AUTH-204)', () => {
 
 describe('Route authorization declarations (AUTH-222)', () => {
   it('refuse to build an app with an undeclared route under the protected prefix and record declared ones', async () => {
+    const declaration = {
+      actor: 'seller',
+      resource: 'thing',
+      action: 'read',
+      authentication: 'seller-session',
+      authorization: 'the presented live session',
+      tenantSource: 'session',
+      classification: 'read-only',
+      idempotency: 'none',
+      audit: 'none',
+      failure: '401 unauthenticated',
+    } as const;
     const declared = Fastify();
     enforceRouteDeclarations(declared, '/seller');
     declared.get('/health', () => ({ ok: true }));
-    declared.get('/seller/x', { config: { authorization: 'seller-session' } }, () => ({ ok: true }));
+    declared.get('/seller/x', { config: { authorization: 'seller-session', declaration } }, () => ({
+      ok: true,
+    }));
     await declared.ready();
     expect(declaredRoutes(declared)).toEqual([
-      { method: 'GET', url: '/seller/x', authorization: 'seller-session' },
+      { method: 'GET', url: '/seller/x', authorization: 'seller-session', declaration },
     ]);
     await declared.close();
 
-    const undeclared = Fastify();
-    enforceRouteDeclarations(undeclared, '/seller');
-    await expect(
-      undeclared.register((scope, _opts, done) => {
-        try {
-          scope.post('/seller/undeclared', () => ({ ok: true }));
-          done();
-        } catch (err) {
-          done(err as Error);
-        }
-      }),
-    ).rejects.toThrow(/AUTH-222/);
-    await undeclared.close();
+    const refused = async (register: (scope: FastifyInstance) => void) => {
+      const app = Fastify();
+      enforceRouteDeclarations(app, '/seller');
+      await expect(
+        app.register((scope, _opts, done) => {
+          try {
+            register(scope);
+            done();
+          } catch (err) {
+            done(err as Error);
+          }
+        }),
+      ).rejects.toThrow(/AUTH-222/);
+      await app.close();
+    };
+    // No declaration at all, a policy without the structured declaration, and an incomplete one.
+    await refused((scope) => scope.post('/seller/undeclared', () => ({ ok: true })));
+    await refused((scope) =>
+      scope.post('/seller/policy-only', { config: { authorization: 'seller-session' } }, () => ({
+        ok: true,
+      })),
+    );
+    await refused((scope) =>
+      scope.post(
+        '/seller/incomplete',
+        { config: { authorization: 'seller-session', declaration: { ...declaration, audit: ' ' } } },
+        () => ({ ok: true }),
+      ),
+    );
   });
 });

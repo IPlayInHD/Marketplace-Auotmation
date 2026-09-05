@@ -3,14 +3,10 @@ import { z } from 'zod';
 import type { AuthConfig } from '../../config.ts';
 import * as auth from '../../modules/identity-auth/index.ts';
 import * as sellers from '../../modules/sellers/index.ts';
-import { IDEMPOTENCY_KEY_HEADER, IdempotencyKeyHeaderSchema } from '../../shared/command.ts';
-import {
-  AntiForgeryRefusedError,
-  ClientIdentityError,
-  IdempotencyKeyRequiredError,
-  OriginRefusedError,
-  UnauthenticatedError,
-} from '../../shared/errors.ts';
+import { AntiForgeryRefusedError, ClientIdentityError, OriginRefusedError } from '../../shared/errors.ts';
+import type { RouteDeclaration } from '../authorization.ts';
+import { registerSellerListingRoutes } from './seller-listings.ts';
+import { presentedToken, provenToken, requiredIdempotencyKey } from './seller-request.ts';
 
 // The authenticated seller route tree (ARCH-002, D-19). Its own plugin scope: the origin hook
 // below applies to every state-changing request in this tree and to nothing else. Every route
@@ -21,6 +17,89 @@ import {
 // sign-in or rotation is ignored, never a promise of exact replay, because the token those
 // routes answer is stored nowhere it could be replayed from (AUTH-205). Sign-out converges to
 // signed-out with one fixed response. Sign-out-all requires a client-generated UUID key.
+//
+// The listing routes of Slice 1e are registered into this same scope by seller-listings.ts, so
+// the origin hook below covers them too.
+
+/** The canonical AUTH-222 declarations of the authentication routes, mirrored in the README inventory. */
+export const SELLER_AUTH_DECLARATIONS = {
+  signIn: {
+    actor: 'anonymous',
+    resource: 'seller_session',
+    action: 'sign_in',
+    authentication: 'none',
+    authorization: 'the password verifies for the presented address, inside the account and client throttles',
+    tenantSource: 'none',
+    classification: 'one-time-secret',
+    idempotency: 'none; an Idempotency-Key is ignored and promises nothing (D-20)',
+    audit:
+      'SELLER_SIGN_IN_SUCCEEDED and SELLER_SESSION_EVICTED in the seller trail; SELLER_SIGN_IN_FAILED and SELLER_SIGN_IN_THROTTLED in auth.sign_in_event',
+    failure: '401 invalid_credentials; 429 try_later with Retry-After; 403 forbidden_origin; 400 bad_request',
+  },
+  me: {
+    actor: 'seller',
+    resource: 'seller_session',
+    action: 'read',
+    authentication: 'seller-session',
+    authorization: 'the presented live session',
+    tenantSource: 'session',
+    classification: 'read-only',
+    idempotency: 'none; no Idempotency-Key',
+    audit: 'none',
+    failure: '401 unauthenticated',
+  },
+  sessions: {
+    actor: 'seller',
+    resource: 'seller_session',
+    action: 'list',
+    authentication: 'seller-session',
+    authorization: 'the presented live session; only its own account is listed',
+    tenantSource: 'session',
+    classification: 'read-only',
+    idempotency: 'none; no Idempotency-Key',
+    audit: 'none',
+    failure: '401 unauthenticated',
+  },
+  rotate: {
+    actor: 'seller',
+    resource: 'seller_session',
+    action: 'rotate',
+    authentication: 'seller-session',
+    authorization: 'the presented live session, replaced by its successor in one transaction',
+    tenantSource: 'session',
+    classification: 'one-time-secret',
+    idempotency:
+      'none; an Idempotency-Key is ignored; a retry with the revoked predecessor creates nothing (D-20)',
+    audit: 'SELLER_SESSION_ROTATED',
+    failure: '401 unauthenticated; 403 forbidden_origin or forbidden_anti_forgery',
+  },
+  signOut: {
+    actor: 'seller',
+    resource: 'seller_session',
+    action: 'sign_out',
+    authentication: 'seller-session',
+    authorization:
+      'a presented live session is revoked; a missing, unknown, expired or revoked one converges to signed-out',
+    tenantSource: 'session',
+    classification: 'naturally-idempotent',
+    idempotency: 'none; one fixed 204 however often it is repeated (D-20)',
+    audit: 'SELLER_SIGNED_OUT once, for the revocation only',
+    failure: '403 forbidden_origin or forbidden_anti_forgery for a well-formed token; otherwise always 204',
+  },
+  signOutAll: {
+    actor: 'seller',
+    resource: 'seller_account',
+    action: 'revoke_all_sessions',
+    authentication: 'seller-session',
+    authorization: 'the presented live session, or the exact D-20 replay of the sign-out-all it initiated',
+    tenantSource: 'session',
+    classification: 'consequential',
+    idempotency: 'Idempotency-Key required (client UUID); exact replay returns the stored outcome (D-20)',
+    audit: 'SELLER_SESSIONS_REVOKED in the same transaction as the receipt',
+    failure:
+      '401 unauthenticated; 403 forbidden_origin or forbidden_anti_forgery; 400 idempotency_key_required; 409 idempotency_conflict',
+  },
+} as const satisfies Record<string, RouteDeclaration>;
 
 export interface SellerRoutesOptions {
   auth: auth.AuthService;
@@ -52,7 +131,6 @@ function registerSellerRoutes(
   const proxies = auth.trustedProxyPolicy(config.trustedProxies);
   const key: auth.IdentifierKey = { key: config.clientHashKey, version: config.clientHashKeyVersion };
 
-  const presentedToken = (request: FastifyRequest): unknown => request.cookies[cookie.name];
   const setSession = (reply: FastifyReply, token: string) =>
     reply.setCookie(cookie.name, token, auth.setCookieOptions(cookie));
   const clearSession = (reply: FastifyReply) =>
@@ -68,26 +146,6 @@ function registerSellerRoutes(
     return auth.hashClientIdentifier(resolved.canonical, key);
   };
 
-  /** OPS-730 (D-20): one well-formed client-generated UUID, or the request is refused before any work. */
-  const requiredIdempotencyKey = (request: FastifyRequest): string => {
-    const parsed = IdempotencyKeyHeaderSchema.safeParse(request.headers[IDEMPOTENCY_KEY_HEADER]);
-    if (!parsed.success) throw new IdempotencyKeyRequiredError();
-    return parsed.data;
-  };
-
-  /**
-   * The presented token, checked for shape and, on a state-changing method, for the session's
-   * anti-forgery value (SEC-310) before anything is resolved or mutated.
-   */
-  const provenToken = (request: FastifyRequest): string => {
-    const token = presentedToken(request);
-    if (!auth.isWellFormedToken(token)) throw new UnauthenticatedError();
-    if (auth.STATE_CHANGING_METHODS.has(request.method) && !auth.verifyAntiForgery(request.headers, token)) {
-      throw new AntiForgeryRefusedError();
-    }
-    return token;
-  };
-
   // SEC-311 on every state-changing request in this tree, sign-in included, before any handler.
   app.addHook('onRequest', (request, _reply, done) => {
     if (!auth.STATE_CHANGING_METHODS.has(request.method)) return done();
@@ -101,7 +159,7 @@ function registerSellerRoutes(
 
   app.post(
     '/auth/sign-in',
-    { config: { authorization: 'unauthenticated-sign-in' } },
+    { config: { authorization: 'unauthenticated-sign-in', declaration: SELLER_AUTH_DECLARATIONS.signIn } },
     async (request, reply) => {
       const body = SignInBody.parse(request.body);
       const client = identifyClient(request);
@@ -128,30 +186,38 @@ function registerSellerRoutes(
     },
   );
 
-  app.get('/auth/me', { config: { authorization: 'seller-session' } }, async (request, reply) => {
-    const token = provenToken(request);
-    const me = await options.auth.withSellerSession(token, async (trx, principal) => {
-      const seller = await sellers.getSeller(trx, principal.sellerId);
-      return {
-        sellerId: principal.sellerId,
-        displayName: seller.displayName,
-        sessionId: principal.sessionId,
-      };
-    });
-    return reply.code(200).send({ ...me, antiForgery: auth.antiForgeryTokenFor(token) });
-  });
+  app.get(
+    '/auth/me',
+    { config: { authorization: 'seller-session', declaration: SELLER_AUTH_DECLARATIONS.me } },
+    async (request, reply) => {
+      const token = provenToken(request, cookie.name);
+      const me = await options.auth.withSellerSession(token, async (trx, principal) => {
+        const seller = await sellers.getSeller(trx, principal.sellerId);
+        return {
+          sellerId: principal.sellerId,
+          displayName: seller.displayName,
+          sessionId: principal.sessionId,
+        };
+      });
+      return reply.code(200).send({ ...me, antiForgery: auth.antiForgeryTokenFor(token) });
+    },
+  );
 
-  app.get('/auth/sessions', { config: { authorization: 'seller-session' } }, async (request, reply) => {
-    const sessions = await options.auth.listSessions(provenToken(request));
-    return reply.code(200).send({ sessions });
-  });
+  app.get(
+    '/auth/sessions',
+    { config: { authorization: 'seller-session', declaration: SELLER_AUTH_DECLARATIONS.sessions } },
+    async (request, reply) => {
+      const sessions = await options.auth.listSessions(provenToken(request, cookie.name));
+      return reply.code(200).send({ sessions });
+    },
+  );
 
   app.post(
     '/auth/sessions/rotate',
-    { config: { authorization: 'seller-session' } },
+    { config: { authorization: 'seller-session', declaration: SELLER_AUTH_DECLARATIONS.rotate } },
     async (request, reply) => {
       const next = await options.auth.rotateSession(
-        provenToken(request),
+        provenToken(request, cookie.name),
         identifyClient(request),
         request.id,
       );
@@ -166,22 +232,32 @@ function registerSellerRoutes(
   // revoke. A well-formed token still needs its anti-forgery value, a check on the request alone
   // that discloses nothing about any session; without a well-formed token nothing could be
   // mutated and nothing is looked up.
-  app.post('/auth/sign-out', { config: { authorization: 'seller-session' } }, async (request, reply) => {
-    const presented = presentedToken(request);
-    if (auth.isWellFormedToken(presented)) {
-      if (!auth.verifyAntiForgery(request.headers, presented)) throw new AntiForgeryRefusedError();
-      await options.auth.signOut(presented, request.id);
-    }
-    clearSession(reply);
-    return reply.code(204).send();
-  });
+  app.post(
+    '/auth/sign-out',
+    { config: { authorization: 'seller-session', declaration: SELLER_AUTH_DECLARATIONS.signOut } },
+    async (request, reply) => {
+      const presented = presentedToken(request, cookie.name);
+      if (auth.isWellFormedToken(presented)) {
+        if (!auth.verifyAntiForgery(request.headers, presented)) throw new AntiForgeryRefusedError();
+        await options.auth.signOut(presented, request.id);
+      }
+      clearSession(reply);
+      return reply.code(204).send();
+    },
+  );
 
   // AUTH-232 (D-20): consequential; the key is required before any lookup or mutation.
-  app.post('/auth/sign-out-all', { config: { authorization: 'seller-session' } }, async (request, reply) => {
-    const token = provenToken(request);
-    const key = requiredIdempotencyKey(request);
-    const result = await options.auth.signOutAll(token, key, request.id);
-    clearSession(reply);
-    return reply.code(200).send({ revoked: result.revoked });
-  });
+  app.post(
+    '/auth/sign-out-all',
+    { config: { authorization: 'seller-session', declaration: SELLER_AUTH_DECLARATIONS.signOutAll } },
+    async (request, reply) => {
+      const token = provenToken(request, cookie.name);
+      const key = requiredIdempotencyKey(request);
+      const result = await options.auth.signOutAll(token, key, request.id);
+      clearSession(reply);
+      return reply.code(200).send({ revoked: result.revoked });
+    },
+  );
+
+  registerSellerListingRoutes(app, { auth: options.auth, cookieName: cookie.name });
 }

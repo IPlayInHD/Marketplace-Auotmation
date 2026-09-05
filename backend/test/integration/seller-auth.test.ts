@@ -664,15 +664,16 @@ describe('Seller authentication foundation (D-19)', () => {
     });
   });
 
-  it('exposes exactly the six authentication routes, all declared, and nothing else under the seller prefix', async () => {
+  it('exposes exactly the six authentication routes, all declared, and no registration, reset, verification, publication or buyer route', async () => {
     const routes = harness.app.printRoutes({ commonPrefix: false });
     expect(routes).toContain('/seller/auth/sign-in (POST)');
-    expect(routes).not.toMatch(/sign-up|register|reset|verify|listing/);
+    expect(routes).not.toMatch(/sign-up|register|reset|verify|publish|status|delete|photo|buyer/);
     for (const [method, url] of [
       ['POST', '/seller/auth/sign-up'],
       ['POST', '/seller/auth/reset'],
       ['GET', '/seller/listings'],
-      ['POST', '/seller/listings'],
+      ['DELETE', '/seller/listings/00000000-0000-4000-8000-000000000000'],
+      ['POST', '/seller/listings/00000000-0000-4000-8000-000000000000/publish'],
     ] as const) {
       const res = await harness.app.inject({ method, url, headers: { origin: TEST_ORIGIN } });
       expect(res.statusCode, `${method} ${url}`).toBe(404);

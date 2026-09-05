@@ -250,7 +250,7 @@ export async function sessionRows(superuserUrl: string, accountId?: string): Pro
     superuserUrl,
     `SELECT id, account_id, encode(token_hash, 'hex') AS token_hash_hex, client_hash, client_key_version,
             revoked_at, revocation_reason, replaced_by_session_id, absolute_expires_at, last_seen_at, xmin::text AS xmin
-       FROM auth.seller_session WHERE ($1::uuid IS NULL OR account_id = $1::uuid) ORDER BY created_at`,
+       FROM auth.seller_session WHERE ($1::uuid IS NULL OR account_id = $1::uuid) ORDER BY created_at, id`,
     [accountId ?? null],
   );
 }
