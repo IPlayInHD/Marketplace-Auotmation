@@ -352,10 +352,18 @@ Three read-only routes for a future seller dashboard, registered by
 `src/web/routes/seller-listings.ts` under the same session and RLS rules as every other seller
 route: enumerate the seller's own listings, read the current private policy of one listing, and
 read the immutable content-version history of one listing. None takes an `Idempotency-Key`, writes
-a receipt, writes an audit event or changes any state; each answers `Cache-Control: no-store`, so no
-shared cache stores a private response. GET needs no origin or anti-forgery proof (`SEC-311` binds
-state-changing methods only). Nothing here publishes, lists, relists, enhances, prices or reaches a
-buyer.
+a receipt, writes an audit event or changes any state. GET needs no origin or anti-forgery proof
+(`SEC-311` binds state-changing methods only). Nothing here publishes, lists, relists, enhances,
+prices or reaches a buyer.
+
+**Seller-tree privacy (DATA_AND_PRIVACY §2, OPS-563, OPS-567).** Every response of the seller
+tree, reads, mutations, refusals and unknown paths under the prefix alike, answers
+`Cache-Control: no-store` from one `onSend` hook in `src/web/routes/seller.ts`; the health route
+is outside the tree and unchanged. The workspace read, like the policy read, takes no query at
+all: any parameter, repeated parameter or malformed encoding is `400 bad_request`. Request logs
+carry the method, the query-free path and the route template only (`serializeRequest` in
+`src/observability/logger.ts`, installed on every logger): no query string, cursor, filter, page
+size, cookie, token or client address enters a log line, whatever the request target looked like.
 
 | Route                                              | Declaration                                                                                             | Request                                                                          | Success                          |
 | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------- |
@@ -394,6 +402,10 @@ approval changes. The listing is resolved first, so a foreign or nonexistent lis
 Test suite: `test/integration/seller-dashboard-reads.test.ts`. Not here, by design: a policy
 explanation (`LIST-133` AC1), search, sorting choices, offset pagination, analytics, exports,
 buyer surfaces.
+
+Private-alpha technical debt: cursors are validated, filter-bound and tenant-bounded by row-level
+security, but not signed. A tampered cursor can only reposition the caller inside their own tenant
+and their own filter; signing is deferred until a server-side key for it is decided.
 
 ## Environment variables
 

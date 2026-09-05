@@ -20,6 +20,11 @@ import { presentedToken, provenToken, requiredIdempotencyKey } from './seller-re
 //
 // The listing routes of Slice 1e are registered into this same scope by seller-listings.ts, so
 // the origin hook below covers them too.
+//
+// Cache policy: every response of this tree is private to one seller (P2 and P3 data,
+// DATA_AND_PRIVACY §2), so the onSend hook below answers `Cache-Control: no-store` on all of
+// them, reads, mutations and refusals alike, and a scoped not-found handler keeps unknown paths
+// under the prefix inside the same policy. Nothing outside this tree is touched.
 
 /** The canonical AUTH-222 declarations of the authentication routes, mirrored in the README inventory. */
 export const SELLER_AUTH_DECLARATIONS = {
@@ -145,6 +150,16 @@ function registerSellerRoutes(
     if (!resolved.ok) throw new ClientIdentityError(resolved.reason);
     return auth.hashClientIdentifier(resolved.canonical, key);
   };
+
+  // No shared or private cache may store a seller response: the whole tree answers no-store. A
+  // handler that already set a cache directive keeps it; none does today.
+  app.addHook('onSend', (_request, reply, _payload, done) => {
+    if (!reply.hasHeader('cache-control')) reply.header('cache-control', 'no-store');
+    done();
+  });
+  // An unknown path under the seller prefix answers the same fixed body as everywhere else, from
+  // inside this scope, so the cache policy above applies to it too.
+  app.setNotFoundHandler((_request, reply) => reply.code(404).send({ error: 'not_found' }));
 
   // SEC-311 on every state-changing request in this tree, sign-in included, before any handler.
   app.addHook('onRequest', (request, _reply, done) => {

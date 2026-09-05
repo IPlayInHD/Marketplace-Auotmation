@@ -19,6 +19,7 @@ import {
   post,
   provisionAccount,
   signIn,
+  signInRequest,
   startAuthApp,
   TEST_ORIGIN,
   type AuthApp,
@@ -417,9 +418,13 @@ describe('Seller dashboard reads (Slice 1i)', () => {
     events: await events(sellerId),
     receipts: await receipts(sellerId),
   });
-  const PROTECTED = [String(MINIMUM.amountMinor), String(OTHER_MINIMUM.amountMinor)];
+  // The amount as a JSON number or a string value, never as a run of digits inside a hex identifier
+  // or a timestamp: the boundaries exclude hex digits and the hyphen (a deterministic check).
+  const PROTECTED = [MINIMUM.amountMinor, OTHER_MINIMUM.amountMinor].map(
+    (v) => new RegExp(`(?<![0-9a-fA-F-])${String(v)}(?![0-9a-fA-F-])`),
+  );
   const expectNoMinimum = (text: string, label: string) => {
-    for (const v of PROTECTED) expect(text, `${label} carries the minimum ${v}`).not.toContain(v);
+    for (const v of PROTECTED) expect(text, `${label} carries the minimum ${v.source}`).not.toMatch(v);
   };
   const keysOf = (value: unknown): string[] => {
     const keys: string[] = [];
@@ -1010,6 +1015,245 @@ describe('Seller dashboard reads (Slice 1i)', () => {
     }
   });
 
+  it('answers Cache-Control: no-store on every seller-tree response, keeps cookies set and cleared, and leaves the health route alone', async () => {
+    const target = await prepared(sessionA);
+    const noStore = (res: LightMyRequestResponse, label: string) =>
+      expect(res.headers['cache-control'], label).toBe('no-store');
+    // Authentication: sign-in sets the cookie, rotation replaces it, sign-out clears it; all no-store.
+    const signedIn = await signInRequest(harness, sellerA.email, sellerA.password);
+    expect(signedIn.statusCode).toBe(200);
+    noStore(signedIn, 'sign-in');
+    const first: Session = {
+      token: cookieOf(signedIn, harness.cookieName)?.value ?? '',
+      antiForgery: signedIn.json<{ antiForgery: string }>().antiForgery,
+    };
+    remember(first);
+    expect(first.token).toMatch(/\S/);
+    noStore(await getRead(`${AUTH_PREFIX}/me`, first.token), 'me');
+    noStore(await getRead(`${AUTH_PREFIX}/sessions`, first.token), 'sessions');
+    const rotated = await post(harness, `${AUTH_PREFIX}/sessions/rotate`, first);
+    expect(rotated.statusCode).toBe(200);
+    noStore(rotated, 'rotate');
+    const next: Session = {
+      token: cookieOf(rotated, harness.cookieName)?.value ?? '',
+      antiForgery: rotated.json<{ antiForgery: string }>().antiForgery,
+    };
+    remember(next);
+    expect(next.token).toMatch(/\S/);
+    expect(next.token).not.toBe(first.token);
+    const badPassword = await signInRequest(harness, sellerA.email, 'not the synthetic passphrase');
+    expect(badPassword.statusCode).toBe(401);
+    noStore(badPassword, 'sign-in refused');
+    // Reads.
+    for (const [label, res] of [
+      ['workspace', await read(sessionA.token, target.id)],
+      ['list', await list(sessionA.token, { limit: '2' })],
+      ['policy', await getPolicy(sessionA.token, target.id)],
+      ['history', await getHistory(sessionA.token, target.id)],
+    ] as const) {
+      expect(res.statusCode, label).toBe(200);
+      noStore(res, label);
+    }
+    // Mutations and their ordinary refusals, including one refused before its handler.
+    const created = await mutate('POST', LISTINGS, sessionA, randomUUID(), {});
+    expect(created.statusCode).toBe(201);
+    noStore(created, 'create');
+    const facts = await putFacts(sessionA, created.json<ListingBody>().listing.id, FACTS, 1);
+    expect(facts.statusCode).toBe(200);
+    noStore(facts, 'facts');
+    for (const [label, res, status] of [
+      ['unauthenticated', await list(undefined), 401],
+      ['malformed id', await getPolicy(sessionA.token, 'not-a-uuid'), 400],
+      ['not found', await getPolicy(sessionA.token, randomUUID()), 404],
+      [
+        'origin refused',
+        await mutate('POST', LISTINGS, sessionA, randomUUID(), {}, { origin: 'https://evil.example' }),
+        403,
+      ],
+      ['invalid state', await ready(sessionA, target.id, target.rowVersion), 409],
+      ['no key', await mutate('POST', LISTINGS, sessionA, undefined, {}), 400],
+    ] as const) {
+      expect(res.statusCode, label).toBe(status);
+      noStore(res, label);
+    }
+    const signedOut = await post(harness, `${AUTH_PREFIX}/sign-out`, next);
+    expect(signedOut.statusCode).toBe(204);
+    noStore(signedOut, 'sign-out');
+    expect(cookieOf(signedOut, harness.cookieName)?.value).toBe('');
+    // The health route is outside the seller tree and keeps its behaviour.
+    const health = await harness.app.inject({ method: 'GET', url: '/health' });
+    expect(health.statusCode).toBe(200);
+    expect(health.json()).toEqual({ status: 'ok', database: 'reachable' });
+    expect(health.headers['cache-control']).toBeUndefined();
+  });
+
+  it('refuses any query on the workspace read with the fixed body and answers the same body without one', async () => {
+    const target = await prepared(sessionA);
+    const url = `${LISTINGS}/${target.id}`;
+    const baseline = await read(sessionA.token, target.id);
+    expect(baseline.statusCode).toBe(200);
+    expect(Object.keys(baseline.json<WorkspaceBody>()).sort()).toEqual(['draft', 'facts', 'listing']);
+    const before = await snapshot(sellerA.sellerId);
+    for (const [label, res] of [
+      ['unknown', await getRead(url, sessionA.token, { include: 'facts' })],
+      ['identity', await getRead(url, sessionA.token, { listingId: target.id })],
+      ['sellerId', await getRead(url, sessionA.token, { sellerId: sellerB.sellerId })],
+      ['limit', await getRead(url, sessionA.token, { limit: '1' })],
+      ['repeated', await getRead(url, sessionA.token, { a: ['1', '2'] })],
+      [
+        'empty key',
+        await harness.app.inject({
+          method: 'GET',
+          url: `${url}?=1`,
+          cookies: { [harness.cookieName]: sessionA.token },
+        }),
+      ],
+      [
+        'malformed encoding',
+        await harness.app.inject({
+          method: 'GET',
+          url: `${url}?%E0%A4%A=1&%zz`,
+          cookies: { [harness.cookieName]: sessionA.token },
+        }),
+      ],
+    ] as const) {
+      expect(res.statusCode, label).toBe(400);
+      expect(res.json(), label).toEqual({ error: 'bad_request' });
+      expect(res.body, label).not.toMatch(/query|schema|zod|expected|unrecognized/i);
+    }
+    // A bare separator is an empty query, and the body is exactly the query-free one.
+    const bare = await harness.app.inject({
+      method: 'GET',
+      url: `${url}?`,
+      cookies: { [harness.cookieName]: sessionA.token },
+    });
+    expect(bare.statusCode).toBe(200);
+    expect(bare.body).toBe(baseline.body);
+    expect((await read(sessionA.token, target.id)).body).toBe(baseline.body);
+    expect(await snapshot(sellerA.sellerId)).toEqual(before);
+  });
+
+  it('logs every request as its method, query-free path and route template: no query string, cursor, status, limit, cookie or token reaches the log', async () => {
+    const target = await prepared(sessionA);
+    for (let i = 0; i < 2; i += 1) await create(sessionA);
+    expect(
+      (
+        await putDraft(sessionA, target.id, target.rowVersion, target.versionId, {
+          title: 'Synthetic gravel bicycle, logged wording',
+        })
+      ).statusCode,
+    ).toBe(200);
+    const cursor = (await list(sessionA.token, { limit: '1' })).json<ListBody>().nextCursor ?? '';
+    const historyCursor =
+      (await getHistory(sessionA.token, target.id, { limit: '1' })).json<HistoryBody>().nextCursor ?? '';
+    expect(cursor).toMatch(/\S/);
+    expect(historyCursor).toMatch(/\S/);
+    const from = harness.logs.length;
+    const cookies = { [harness.cookieName]: sessionA.token };
+    const attempts: [string, LightMyRequestResponse, number][] = [
+      ['list with cursor', await list(sessionA.token, { limit: '1', cursor }), 200],
+      ['list with status', await list(sessionA.token, { status: 'DRAFT', limit: '3' }), 200],
+      [
+        'history with cursor',
+        await getHistory(sessionA.token, target.id, { limit: '1', cursor: historyCursor }),
+        200,
+      ],
+      [
+        'workspace with a query',
+        await getRead(`${LISTINGS}/${target.id}`, sessionA.token, { include: 'facts' }),
+        400,
+      ],
+      [
+        'repeated and malformed',
+        await harness.app.inject({
+          method: 'GET',
+          url: `${LISTINGS}?limit=1&limit=2&%zz=1&cursor=${cursor}`,
+          cookies,
+        }),
+        400,
+      ],
+      [
+        'refused before its handler',
+        await mutate(
+          'POST',
+          `${LISTINGS}?cursor=${cursor}`,
+          sessionA,
+          randomUUID(),
+          {},
+          { origin: 'https://evil.example' },
+        ),
+        403,
+      ],
+      [
+        'unknown route',
+        await harness.app.inject({ method: 'GET', url: `/seller/nothing?cursor=${cursor}&limit=9` }),
+        404,
+      ],
+      [
+        'unknown root route',
+        await harness.app.inject({ method: 'GET', url: `/nothing?cursor=${cursor}` }),
+        404,
+      ],
+      [
+        'unauthenticated with a query',
+        await harness.app.inject({ method: 'GET', url: `${LISTINGS}?cursor=${cursor}` }),
+        401,
+      ],
+      [
+        'fragment and encoding',
+        await harness.app.inject({ method: 'GET', url: `${LISTINGS}%3F?cursor=${cursor}#frag`, cookies }),
+        404,
+      ],
+      [
+        'absolute form',
+        await harness.app.inject({
+          method: 'GET',
+          url: `${TEST_ORIGIN}${LISTINGS}?cursor=${cursor}&limit=1`,
+          cookies,
+        }),
+        200,
+      ],
+    ];
+    for (const [label, res, status] of attempts) expect(res.statusCode, label).toBe(status);
+    const fresh = harness.logs.slice(from);
+    const text = fresh.join('');
+    expect(fresh.length).toBeGreaterThan(attempts.length);
+    expect(text).not.toContain(cursor);
+    expect(text).not.toContain(historyCursor);
+    expect(text).not.toMatch(/limit=|status=|cursor=|include=|%zz|DRAFT/);
+    for (const s of secrets) expect(text).not.toContain(s);
+    expect(text).not.toMatch(/"cookie"|"set-cookie"|"authorization"/);
+    const requests = fresh
+      .filter((l) => l.trim())
+      .map((l) => JSON.parse(l) as { req?: Record<string, unknown>; request_id?: string; msg?: string })
+      .filter((r) => r.req !== undefined);
+    expect(requests.length).toBeGreaterThanOrEqual(attempts.length);
+    for (const r of requests) {
+      const req = r.req ?? {};
+      expect(typeof req['url'], JSON.stringify(req)).toBe('string');
+      expect(req['url'] as string, JSON.stringify(req)).not.toMatch(/[?&=#]/);
+      expect(req['url'] as string, JSON.stringify(req)).toMatch(/^\//);
+      expect(req['method'], JSON.stringify(req)).toMatch(/^(GET|POST)$/);
+      expect(r.request_id).toMatch(/^[0-9a-f-]{36}$/);
+      for (const k of ['headers', 'query', 'querystring', 'remoteAddress', 'host', 'ip'])
+        expect(req, k).not.toHaveProperty(k);
+    }
+    const urls = requests.map((r) => r.req?.['url']);
+    const routes = requests.map((r) => r.req?.['route']);
+    expect(urls).toContain(LISTINGS);
+    expect(urls).toContain(`${LISTINGS}/${target.id}`);
+    expect(urls).toContain(`${LISTINGS}/${target.id}/content-versions`);
+    expect(urls).toContain('/seller/nothing');
+    expect(urls).toContain('/nothing');
+    expect(routes).toContain(LISTINGS);
+    expect(routes).toContain(`${LISTINGS}/:listingId`);
+    expect(routes).toContain(`${LISTINGS}/:listingId/content-versions`);
+    // The completed-request lines keep status and timing for diagnostics.
+    expect(text).toMatch(/"statusCode":200/);
+    expect(text).toMatch(/"statusCode":403/);
+    expect(text).toMatch(/"responseTime":/);
+  });
+
   it('answers the minimum price to the owner on the policy route only, and never in another response, an event, a receipt, a log, the workspace, the enumeration or a buyer-safe projection', async () => {
     // A published listing with the private minimum: its buyer-safe projection carries nothing protected.
     const db = harness.runtime.db;
@@ -1038,6 +1282,12 @@ describe('Seller dashboard reads (Slice 1i)', () => {
     let policyAnswers = 0;
     for (const { url, body } of responses) {
       if (!body) continue;
+      // The authentication contract answers the seller's own identifiers by design; the listing
+      // surface is what this scan polices, and the minimum stays out of both.
+      if (url.startsWith(AUTH_PREFIX)) {
+        expectNoMinimum(body, url);
+        continue;
+      }
       const parsed = JSON.parse(body) as Record<string, unknown>;
       const keys = keysOf(parsed);
       for (const k of keys) expect(k, `${url} ${body.slice(0, 120)}`).not.toMatch(forbidden);

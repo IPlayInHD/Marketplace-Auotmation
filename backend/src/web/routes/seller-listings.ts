@@ -1,4 +1,4 @@
-import type { FastifyPluginCallback, FastifyReply } from 'fastify';
+import type { FastifyPluginCallback } from 'fastify';
 import { z } from 'zod';
 import type * as auth from '../../modules/identity-auth/index.ts';
 import type * as content from '../../modules/listing-content/index.ts';
@@ -67,7 +67,7 @@ const ListListingsQuery = z.strictObject({
 });
 /** History: the page size and the cursor. Nothing else. */
 const ContentHistoryQuery = z.strictObject({ limit: PageSize, cursor: CursorText.optional() });
-/** The policy read takes no query at all; any parameter is refused. */
+/** The workspace and policy reads take no query at all; any parameter, repeated or not, is refused. */
 const NoQuery = z.strictObject({});
 /**
  * A listing-page cursor binds the filter it was issued under, so a page cannot continue a
@@ -473,6 +473,7 @@ export function registerSellerListingRoutes(
     async (request, reply) => {
       const token = provenToken(request, cookieName);
       const params = ListingParams.parse(request.params);
+      NoQuery.parse(request.query);
       const workspace = await options.auth.withSellerSession(token, (trx) =>
         listings.getListingWorkspace(trx, params.listingId),
       );
@@ -656,10 +657,9 @@ export function registerSellerListingRoutes(
       return reply.code(200).send({ listing: presentListing(listing) });
     },
   );
-  // Slice 1i: three read-only dashboard reads. No key, no receipt, no event, no state change; a
-  // private answer that no shared cache may store (`Cache-Control: no-store`). Each runs inside
-  // withSellerSession under forced row-level security, so a foreign listing is not found.
-  const privateRead = (reply: FastifyReply) => reply.code(200).header('cache-control', 'no-store');
+  // Slice 1i: three read-only dashboard reads. No key, no receipt, no event, no state change. Each
+  // runs inside withSellerSession under forced row-level security, so a foreign listing is not
+  // found. The seller tree's onSend hook answers `Cache-Control: no-store` on every response.
 
   // GET: the seller's own listings, newest first, in fixed pages (OPS-721). The seller-safe
   // listing view only: no minimum, no words, no facts, no policy, no cost.
@@ -683,7 +683,7 @@ export function registerSellerListingRoutes(
           ...(after === undefined ? {} : { after }),
         }),
       );
-      return privateRead(reply).send({
+      return reply.code(200).send({
         listings: page.listings.map(presentListing),
         nextCursor:
           page.next === null ? null : encodeCursor({ v: 1, kind: 'listings', status, position: page.next }),
@@ -703,7 +703,7 @@ export function registerSellerListingRoutes(
       const current = await options.auth.withSellerSession(token, (trx) =>
         listings.getCurrentPolicy(trx, params.listingId),
       );
-      return privateRead(reply).send({
+      return reply.code(200).send({
         listing: presentListing(current.listing),
         policyVersion: current.policyVersion === null ? null : presentPolicy(current.policyVersion),
       });
@@ -737,7 +737,7 @@ export function registerSellerListingRoutes(
           ...(below === undefined ? {} : { belowVersionNumber: below }),
         }),
       );
-      return privateRead(reply).send({
+      return reply.code(200).send({
         versions: history.versions.map(presentDraft),
         nextCursor:
           history.nextBelow === null

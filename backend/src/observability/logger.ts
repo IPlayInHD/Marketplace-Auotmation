@@ -75,6 +75,61 @@ export interface LoggerOptions {
   stream?: DestinationStream;
 }
 
+const LOGGED_PATH_MAX = 2048;
+
+/**
+ * The request target as it may be logged (OPS-563, OPS-567, DATA_AND_PRIVACY §2: logs are P1 and
+ * hold no P2 to P4 content): the path only. Everything from the first `?` or `#` on is dropped,
+ * generically, so no query string, pagination cursor, filter, page size or stray parameter reaches
+ * a log line; an absolute-form target loses its scheme and authority; anything that is not a
+ * string becomes the empty string. The result is bounded and the function never throws.
+ */
+export function sanitizeRequestUrl(url: unknown): string {
+  if (typeof url !== 'string') return '';
+  let end = url.length;
+  for (const delimiter of ['?', '#']) {
+    const at = url.indexOf(delimiter);
+    if (at >= 0 && at < end) end = at;
+  }
+  let path = url.slice(0, end);
+  const absolute = /^[a-z][a-z0-9+.-]*:\/\/[^/]*/i.exec(path);
+  if (absolute) path = path.slice(absolute[0].length) || '/';
+  return path.length > LOGGED_PATH_MAX ? path.slice(0, LOGGED_PATH_MAX) : path;
+}
+
+export interface LoggedRequest {
+  method?: string;
+  /** The sanitized path: never a query string. */
+  url: string;
+  /** The matched route template, when the router matched one. */
+  route?: string;
+}
+
+/**
+ * The `req` serializer installed on every logger this module creates. Fastify merges a logger
+ * instance's own serializers over its defaults, so this replaces the default request line (raw
+ * URL, host, client address) with the method, the sanitized path and the route template; headers,
+ * cookies, the client address and the query never enter the record. Total: never throws.
+ */
+/** A property read that cannot throw: a request exposes getters, and a getter may fail early in a request's life. */
+function readProperty(source: unknown, key: string): unknown {
+  if (typeof source !== 'object' || source === null) return undefined;
+  try {
+    return (source as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
+}
+
+export function serializeRequest(req: unknown): LoggedRequest {
+  const method = readProperty(req, 'method');
+  const route = readProperty(readProperty(req, 'routeOptions'), 'url');
+  const logged: LoggedRequest = { url: sanitizeRequestUrl(readProperty(req, 'url')) };
+  if (typeof method === 'string') logged.method = method;
+  if (typeof route === 'string') logged.route = route;
+  return logged;
+}
+
 export function createLogger(options: LoggerOptions): Logger {
   const pinoOptions: pino.LoggerOptions = {
     level: options.level ?? 'info',
@@ -82,6 +137,7 @@ export function createLogger(options: LoggerOptions): Logger {
     timestamp: pino.stdTimeFunctions.isoTime,
     formatters: { level: (label) => ({ severity: label }) },
     redact: { paths: redactPaths(), censor: '[REDACTED]' },
+    serializers: { req: serializeRequest },
   };
   return options.stream ? pino(pinoOptions, options.stream) : pino(pinoOptions);
 }
