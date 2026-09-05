@@ -120,10 +120,18 @@ function reviveListing(stored: Record<string, unknown>): ListingRecord {
 
 const IsoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
-const CreateInventoryItemInput = z.strictObject({
+/**
+ * The seller-supplied facts of an inventory item (DOMAIN_MODEL InventoryItem, INVENTORY_AND_SALES
+ * §5): an optional acquisition cost as Money and an optional acquisition date. Blank means
+ * unknown, never zero and never imputed. Nothing else is accepted; the same schema is the HTTP
+ * contract of listing creation (LIST-100 AC1).
+ */
+export const CreateListingWithItemInputSchema = z.strictObject({
   acquisitionCost: MoneySchema.optional(),
   acquisitionDate: IsoDate.optional(),
 });
+const CreateInventoryItemInput = CreateListingWithItemInputSchema;
+export type CreateListingWithItemInput = z.input<typeof CreateListingWithItemInputSchema>;
 
 export async function createInventoryItem(
   trx: TenantTransaction,
@@ -201,6 +209,32 @@ function mapListingInsertError(err: unknown): unknown {
   return mapDatabaseError(err, 'listing');
 }
 
+/** The one insert of a listing row: DRAFT for the tenant of the context, against one of its items. */
+async function insertListingRow(
+  trx: TenantTransaction,
+  ctx: WriteContext,
+  inventoryItemId: string,
+): Promise<ListingRecord> {
+  try {
+    const row = await trx
+      .insertInto('listing')
+      .values({
+        seller_id: ctx.sellerId,
+        inventory_item_id: inventoryItemId,
+        asking_price_minor: null,
+        currency: null,
+        current_content_version_id: null,
+        current_policy_version_id: null,
+        request_id: ctx.requestId,
+      })
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    return toListing(row);
+  } catch (err) {
+    throw mapListingInsertError(err);
+  }
+}
+
 /** LIST-100: a listing starts in DRAFT (the data layer refuses any other start). */
 export async function createListing(
   trx: TenantTransaction,
@@ -223,25 +257,42 @@ export async function createListing(
         .where('id', '=', inventoryItemId)
         .executeTakeFirst();
       if (!item) throw new NotFoundError('inventory_item');
-      try {
-        const row = await trx
-          .insertInto('listing')
-          .values({
-            seller_id: ctx.sellerId,
-            inventory_item_id: inventoryItemId,
-            asking_price_minor: null,
-            currency: null,
-            current_content_version_id: null,
-            current_policy_version_id: null,
-            request_id: ctx.requestId,
-          })
-          .returningAll()
-          .executeTakeFirstOrThrow();
-        const listing = toListing(row);
-        return { value: listing, subjectId: listing.id, summary: { status: listing.status } };
-      } catch (err) {
-        throw mapListingInsertError(err);
-      }
+      const listing = await insertListingRow(trx, ctx, inventoryItemId);
+      return { value: listing, subjectId: listing.id, summary: { status: listing.status } };
+    },
+    serialize: storeListing,
+    revive: reviveListing,
+  });
+  return outcome.value;
+}
+
+/**
+ * LIST-100 AC1: the seller's one action creates the inventory item and its DRAFT listing. One
+ * command name, one fingerprint over the seller-supplied facts, one receipt and one transaction:
+ * the item is inserted for the tenant of the context with a server-generated identifier, the
+ * listing follows in the same run, LISTING_CREATED is written with both identifiers, and a
+ * failure anywhere, either insert, the event or the receipt, leaves neither record behind
+ * (OPS-787). An exact replay returns the stored listing with the same identifiers (OPS-731).
+ */
+export async function createListingWithItem(
+  trx: TenantTransaction,
+  ctx: CommandContext,
+  input: CreateListingWithItemInput = {},
+): Promise<ListingRecord> {
+  const facts = CreateListingWithItemInputSchema.parse(input);
+  const outcome = await audit.runIdempotent<ListingRecord>(trx, ctx, {
+    command: 'listing.create_with_item',
+    payload: facts,
+    eventType: 'LISTING_CREATED',
+    subjectType: 'listing',
+    run: async () => {
+      const item = await createInventoryItem(trx, ctx, facts);
+      const listing = await insertListingRow(trx, ctx, item.id);
+      return {
+        value: listing,
+        subjectId: listing.id,
+        summary: { status: listing.status, inventory_item_id: item.id },
+      };
     },
     serialize: storeListing,
     revive: reviveListing,

@@ -35,12 +35,14 @@ vi.mock('../../src/db/kysely.ts', async (importOriginal) => {
 });
 const tenantContextCalls = vi.mocked(establishTenantContext);
 
-// Slice 1e: the first authenticated seller listing routes over withSellerSession. Every account,
-// item and amount is synthetic (D-18, DATA-110). Proofs: authentication and CSRF on every route,
-// read-only GET, create and asking-price with exact replay and conflicts, the same-price no-op,
-// refusals without mutation, tenant isolation indistinguishable from absence (AUTH-221), no
-// client-supplied identity (AUTH-220), no tenant context on a pooled connection, and no secret or
-// internal field in responses or logs.
+// Slice 1e: the first authenticated seller listing routes over withSellerSession. Creation is the
+// seller's one action of LIST-100 AC1: the inventory item and its DRAFT listing in one transaction
+// under one receipt. Every account, item and amount is synthetic (D-18, DATA-110). Proofs:
+// authentication and CSRF on every route, read-only GET, atomic creation with exact replay,
+// conflicts and rollback, asking price with replay and the canonical same-price no-op, refusals
+// without mutation, tenant isolation indistinguishable from absence (AUTH-221), no client-supplied
+// identity (AUTH-220), no tenant context on a pooled connection, and no secret or internal field
+// in responses or logs.
 
 const DOMAIN = 'synthetic.invalid';
 const address = (local: string) => [local, DOMAIN].join('@');
@@ -48,6 +50,7 @@ const PASSWORD = 'synthetic passphrase for listings';
 const LISTINGS = `${ROUTE_PREFIXES.seller}/listings`;
 const PRICE: Money = { amountMinor: 12_500, currency: 'CAD' };
 const OTHER_PRICE: Money = { amountMinor: 13_000, currency: 'CAD' };
+const FACTS = { acquisitionCost: { amountMinor: 4_000, currency: 'CAD' }, acquisitionDate: '2026-01-15' };
 const VIEW_KEYS = [
   'askingPrice',
   'closedAt',
@@ -60,11 +63,20 @@ const VIEW_KEYS = [
   'updatedAt',
 ];
 
+interface ItemRow {
+  id: string;
+  seller_id: string;
+  acquisition_cost_minor: number | null;
+  acquisition_currency: string | null;
+  acquisition_date: string | null;
+}
+
 describe('Seller listing routes (Slice 1e)', () => {
   let env: TestDatabase;
   let harness: AuthApp;
   let sellerA: SyntheticAccount;
   let sellerB: SyntheticAccount;
+  let faulty: SyntheticAccount;
   let sessionA: Session;
   let sessionB: Session;
   const secrets: string[] = [PASSWORD];
@@ -73,38 +85,33 @@ describe('Seller listing routes (Slice 1e)', () => {
     secrets.push(s.token, s.antiForgery);
     return s;
   };
-  const withKey = (key: string, extra: Record<string, string> = {}) => ({
-    headers: { origin: TEST_ORIGIN, [IDEMPOTENCY_KEY_HEADER]: key, ...extra },
-  });
   const record = (res: LightMyRequestResponse) => {
     responses.push(res.body);
     return res;
   };
-  const newItem = (sellerId: string) =>
-    withTenant(harness.runtime.db, sellerId, (trx) =>
-      listings.createInventoryItem(trx, { sellerId, requestId: `req-item-${randomUUID()}` }),
-    );
+  const headersFor = (
+    session: Session | undefined,
+    key: string | undefined,
+    extra: Record<string, string>,
+  ) => ({
+    origin: TEST_ORIGIN,
+    ...(key === undefined ? {} : { [IDEMPOTENCY_KEY_HEADER]: key }),
+    ...extra,
+    ...(session ? { [auth.ANTI_FORGERY_HEADER]: session.antiForgery } : {}),
+  });
   const create = (
     session: Session | undefined,
     key: string | undefined,
-    payload: unknown,
+    payload: unknown = {},
     extra: Record<string, string> = {},
+    app: AuthApp = harness,
   ) =>
-    harness.app
+    app.app
       .inject({
         method: 'POST',
         url: LISTINGS,
-        headers: key === undefined ? { origin: TEST_ORIGIN, ...extra } : withKey(key, extra).headers,
-        ...(session ? { cookies: { [harness.cookieName]: session.token } } : {}),
-        ...(session
-          ? {
-              headers: {
-                ...(key === undefined ? { origin: TEST_ORIGIN } : withKey(key).headers),
-                ...extra,
-                [auth.ANTI_FORGERY_HEADER]: session.antiForgery,
-              },
-            }
-          : {}),
+        headers: headersFor(session, key, extra),
+        ...(session ? { cookies: { [app.cookieName]: session.token } } : {}),
         payload: payload as Record<string, unknown>,
       })
       .then(record);
@@ -116,24 +123,24 @@ describe('Seller listing routes (Slice 1e)', () => {
     listingId: string,
     payload: unknown,
     extra: Record<string, string> = {},
+    app: AuthApp = harness,
   ) =>
-    harness.app
+    app.app
       .inject({
         method: 'PATCH',
         url: `${LISTINGS}/${listingId}/asking-price`,
-        headers: {
-          ...(key === undefined ? { origin: TEST_ORIGIN } : withKey(key).headers),
-          ...extra,
-          ...(session ? { [auth.ANTI_FORGERY_HEADER]: session.antiForgery } : {}),
-        },
-        ...(session ? { cookies: { [harness.cookieName]: session.token } } : {}),
+        headers: headersFor(session, key, extra),
+        ...(session ? { cookies: { [app.cookieName]: session.token } } : {}),
         payload: payload as Record<string, unknown>,
       })
       .then(record);
+  const created = (res: LightMyRequestResponse) =>
+    res.json<{ listing: { id: string; inventoryItemId: string } }>().listing;
   const listingRows = (sellerId: string) =>
     query<{
       id: string;
       seller_id: string;
+      inventory_item_id: string;
       status: string;
       asking_price_minor: number | null;
       currency: string | null;
@@ -141,7 +148,15 @@ describe('Seller listing routes (Slice 1e)', () => {
       xmin: string;
     }>(
       env.superuserUrl,
-      `SELECT id, seller_id, status, asking_price_minor, currency, row_version, xmin::text AS xmin FROM app.listing WHERE seller_id = $1 ORDER BY created_at`,
+      `SELECT id, seller_id, inventory_item_id, status, asking_price_minor, currency, row_version, xmin::text AS xmin
+         FROM app.listing WHERE seller_id = $1 ORDER BY created_at, id`,
+      [sellerId],
+    );
+  const itemRows = (sellerId: string) =>
+    query<ItemRow>(
+      env.superuserUrl,
+      `SELECT id, seller_id, acquisition_cost_minor, acquisition_currency, acquisition_date::text AS acquisition_date
+         FROM app.inventory_item WHERE seller_id = $1 ORDER BY created_at, id`,
       [sellerId],
     );
   const events = (sellerId: string) =>
@@ -149,18 +164,33 @@ describe('Seller listing routes (Slice 1e)', () => {
       event_type: string;
       subject_id: string;
       idempotency_key: string | null;
+      request_id: string;
       summary: Record<string, unknown>;
     }>(
       env.superuserUrl,
-      `SELECT event_type::text, subject_id, idempotency_key, summary FROM app.audit_event WHERE seller_id = $1 AND event_type::text LIKE 'LISTING_%' ORDER BY seq`,
+      `SELECT event_type::text, subject_id, idempotency_key, request_id, summary FROM app.audit_event
+        WHERE seller_id = $1 AND event_type::text LIKE 'LISTING_%' ORDER BY seq`,
       [sellerId],
     );
   const receipts = (sellerId: string) =>
-    query<{ idempotency_key: string; command: string; subject_id: string; outcome: Record<string, unknown> }>(
+    query<{
+      idempotency_key: string;
+      command: string;
+      subject_id: string;
+      request_id: string;
+      outcome: Record<string, unknown>;
+    }>(
       env.superuserUrl,
-      `SELECT idempotency_key, command, subject_id, outcome FROM app.idempotency_receipt WHERE seller_id = $1 ORDER BY created_at`,
+      `SELECT idempotency_key, command, subject_id, request_id, outcome FROM app.idempotency_receipt
+        WHERE seller_id = $1 ORDER BY created_at`,
       [sellerId],
     );
+  const snapshot = async (sellerId: string) => ({
+    listings: await listingRows(sellerId),
+    items: await itemRows(sellerId),
+    events: await events(sellerId),
+    receipts: await receipts(sellerId),
+  });
 
   beforeAll(async () => {
     env = await startDatabase();
@@ -174,6 +204,11 @@ describe('Seller listing routes (Slice 1e)', () => {
       email: address('seller-lb'),
       password: PASSWORD,
     });
+    faulty = await provisionAccount(env, {
+      displayName: 'Synthetic Seller LF',
+      email: address('seller-lf'),
+      password: PASSWORD,
+    });
     harness = await startAuthApp(env, { poolMax: 4 });
     sessionA = remember(await signIn(harness, sellerA));
     sessionB = remember(await signIn(harness, sellerB));
@@ -183,8 +218,7 @@ describe('Seller listing routes (Slice 1e)', () => {
     await env?.stop();
   });
 
-  it('requires a live session on every route: missing, malformed, unknown, revoked and expired sessions answer 401 and never reach tenant context', async () => {
-    const item = await newItem(sellerA.sellerId);
+  it('requires a live session on every route: missing, malformed, unknown, revoked and expired sessions answer 401, create nothing and never reach tenant context', async () => {
     const revoked = remember(await signIn(harness, sellerA));
     expect((await post(harness, `${AUTH_PREFIX}/sign-out`, revoked)).statusCode).toBe(204);
     const expired = remember(await signIn(harness, sellerA));
@@ -201,40 +235,28 @@ describe('Seller listing routes (Slice 1e)', () => {
       ['revoked', revoked],
       ['expired', expired],
     ];
-    const rowsBefore = await listingRows(sellerA.sellerId);
+    const before = await snapshot(sellerA.sellerId);
     tenantContextCalls.mockClear();
     for (const [label, session] of cases) {
-      const created = await create(session, randomUUID(), { inventoryItemId: item.id });
-      expect(created.statusCode, `create ${label}`).toBe(401);
-      expect(created.json(), `create ${label}`).toEqual({ error: 'unauthenticated' });
-      expect(cookieOf(created, harness.cookieName)?.value, `create ${label}`).toBe('');
-      const got = await read(session?.token, randomUUID());
-      expect(got.statusCode, `read ${label}`).toBe(401);
-      const priced = await setPrice(session, randomUUID(), randomUUID(), {
-        expectedRowVersion: 1,
-        price: PRICE,
-      });
-      expect(priced.statusCode, `price ${label}`).toBe(401);
+      const res = await create(session, randomUUID(), FACTS);
+      expect(res.statusCode, `create ${label}`).toBe(401);
+      expect(res.json(), `create ${label}`).toEqual({ error: 'unauthenticated' });
+      expect(cookieOf(res, harness.cookieName)?.value, `create ${label}`).toBe('');
+      expect((await read(session?.token, randomUUID())).statusCode, `read ${label}`).toBe(401);
+      expect(
+        (await setPrice(session, randomUUID(), randomUUID(), { expectedRowVersion: 1, price: PRICE }))
+          .statusCode,
+        `price ${label}`,
+      ).toBe(401);
     }
     expect(tenantContextCalls).not.toHaveBeenCalled();
-    expect(await listingRows(sellerA.sellerId)).toEqual(rowsBefore);
+    expect(await snapshot(sellerA.sellerId)).toEqual(before);
   });
 
   it('refuses cross-site and anti-forgery-less create and asking-price requests before any mutation, and reads need neither', async () => {
-    const item = await newItem(sellerA.sellerId);
-    const rowsBefore = await listingRows(sellerA.sellerId);
-    const eventsBefore = await events(sellerA.sellerId);
-    const receiptsBefore = await receipts(sellerA.sellerId);
+    const before = await snapshot(sellerA.sellerId);
     for (const [label, res] of [
-      [
-        'create cross-site',
-        await create(
-          sessionA,
-          randomUUID(),
-          { inventoryItemId: item.id },
-          { origin: 'https://evil.example' },
-        ),
-      ],
+      ['create cross-site', await create(sessionA, randomUUID(), FACTS, { origin: 'https://evil.example' })],
       [
         'price cross-site',
         await setPrice(
@@ -251,7 +273,7 @@ describe('Seller listing routes (Slice 1e)', () => {
     }
     const forged: Session = { token: sessionA.token, antiForgery: 'not-the-value' };
     for (const [label, res] of [
-      ['create forged', await create(forged, randomUUID(), { inventoryItemId: item.id })],
+      ['create forged', await create(forged, randomUUID(), FACTS)],
       [
         'price forged',
         await setPrice(forged, randomUUID(), randomUUID(), { expectedRowVersion: 1, price: PRICE }),
@@ -260,94 +282,167 @@ describe('Seller listing routes (Slice 1e)', () => {
       expect(res.statusCode, label).toBe(403);
       expect(res.json(), label).toEqual({ error: 'forbidden_anti_forgery' });
     }
-    expect(await listingRows(sellerA.sellerId)).toEqual(rowsBefore);
-    expect(await events(sellerA.sellerId)).toEqual(eventsBefore);
-    expect(await receipts(sellerA.sellerId)).toEqual(receiptsBefore);
+    expect(await snapshot(sellerA.sellerId)).toEqual(before);
     // GET carries no state change: no origin, no anti-forgery, no key, and a key is ignored.
-    const created = await create(sessionA, randomUUID(), { inventoryItemId: item.id });
-    expect(created.statusCode).toBe(201);
-    const id = created.json<{ listing: { id: string } }>().listing.id;
-    const plain = await read(sessionA.token, id);
-    const keyed = await read(sessionA.token, id, {
+    const made = created(await create(sessionA, randomUUID()));
+    const plain = await read(sessionA.token, made.id);
+    const keyed = await read(sessionA.token, made.id, {
       [IDEMPOTENCY_KEY_HEADER]: randomUUID(),
       origin: 'https://evil.example',
     });
     expect(plain.statusCode).toBe(200);
     expect(keyed.statusCode).toBe(200);
     expect(keyed.body).toBe(plain.body);
-    const receiptsAfter = await receipts(sellerA.sellerId);
-    expect(receiptsAfter).toHaveLength(receiptsBefore.length + 1);
-    expect(receiptsAfter.at(-1)?.command).toBe('listing.create');
-    expect((await events(sellerA.sellerId)).map((e) => e.event_type)).toEqual([
-      ...eventsBefore.map((e) => e.event_type),
+    const after = await snapshot(sellerA.sellerId);
+    expect(after.receipts).toHaveLength(before.receipts.length + 1);
+    expect(after.events.map((e) => e.event_type)).toEqual([
+      ...before.events.map((e) => e.event_type),
       'LISTING_CREATED',
     ]);
   });
 
-  it('creates a DRAFT listing with 201, one LISTING_CREATED event and one receipt, replays it exactly, and conflicts on another payload or command', async () => {
-    const item = await newItem(sellerA.sellerId);
+  it('creates the inventory item and its DRAFT listing for a seller with no pre-seeded item, in one transaction with one event and one receipt, replays exactly, and conflicts on changed facts or another command', async () => {
+    const fresh = await provisionAccount(env, {
+      displayName: 'Synthetic Seller LN',
+      email: address('seller-ln'),
+      password: PASSWORD,
+    });
+    const session = remember(await signIn(harness, fresh));
+    expect(await snapshot(fresh.sellerId)).toEqual({ listings: [], items: [], events: [], receipts: [] });
     const key = randomUUID();
-    const rowsBefore = (await listingRows(sellerA.sellerId)).length;
-    const first = await create(sessionA, key, { inventoryItemId: item.id });
+    const first = await create(session, key, FACTS);
     expect(first.statusCode).toBe(201);
     const listing = first.json<{ listing: Record<string, unknown> }>().listing;
     expect(Object.keys(listing).sort()).toEqual(VIEW_KEYS);
     expect(listing).toMatchObject({
-      inventoryItemId: item.id,
       status: 'DRAFT',
       askingPrice: null,
       rowVersion: 1,
       listedAt: null,
       closedAt: null,
     });
-    const rows = await listingRows(sellerA.sellerId);
-    expect(rows).toHaveLength(rowsBefore + 1);
-    expect(rows.at(-1)).toMatchObject({
+    expect(String(listing['inventoryItemId'])).toMatch(/^[0-9a-f-]{36}$/);
+    const state = await snapshot(fresh.sellerId);
+    expect(state.items).toEqual([
+      {
+        id: listing['inventoryItemId'],
+        seller_id: fresh.sellerId,
+        acquisition_cost_minor: FACTS.acquisitionCost.amountMinor,
+        acquisition_currency: 'CAD',
+        acquisition_date: FACTS.acquisitionDate,
+      },
+    ]);
+    expect(state.listings).toHaveLength(1);
+    expect(state.listings[0]).toMatchObject({
       id: listing['id'],
-      seller_id: sellerA.sellerId,
+      seller_id: fresh.sellerId,
+      inventory_item_id: listing['inventoryItemId'],
       status: 'DRAFT',
       row_version: 1,
     });
-    const created = (await events(sellerA.sellerId)).filter(
-      (e) => e.event_type === 'LISTING_CREATED' && e.subject_id === listing['id'],
-    );
-    expect(created).toHaveLength(1);
-    expect(created[0]).toMatchObject({ idempotency_key: key, summary: { status: 'DRAFT' } });
-    const stored = (await receipts(sellerA.sellerId)).filter((r) => r.idempotency_key === key);
-    expect(stored).toHaveLength(1);
-    expect(stored[0]).toMatchObject({ command: 'listing.create', subject_id: listing['id'] });
+    expect(state.events).toHaveLength(1);
+    expect(state.events[0]).toMatchObject({
+      event_type: 'LISTING_CREATED',
+      subject_id: listing['id'],
+      idempotency_key: key,
+      summary: { status: 'DRAFT', inventory_item_id: listing['inventoryItemId'] },
+    });
+    expect(state.receipts).toHaveLength(1);
+    expect(state.receipts[0]).toMatchObject({
+      idempotency_key: key,
+      command: 'listing.create_with_item',
+      subject_id: listing['id'],
+    });
+    expect(state.receipts[0]?.request_id).toBe(state.events[0]?.request_id);
+    expect(JSON.stringify(state.receipts[0]?.outcome)).not.toMatch(/acquisition|minimum|password|token/i);
 
-    // Exact replay: the same body and status, and no second row, event or receipt.
-    const replay = await create(sessionA, key, { inventoryItemId: item.id });
+    // Exact replay: identical body and status, the same identifiers, no second record of any kind.
+    const replay = await create(session, key, FACTS);
     expect(replay.statusCode).toBe(201);
     expect(replay.body).toBe(first.body);
-    expect(await listingRows(sellerA.sellerId)).toEqual(rows);
-    expect((await events(sellerA.sellerId)).filter((e) => e.subject_id === listing['id'])).toHaveLength(1);
-    expect((await receipts(sellerA.sellerId)).filter((r) => r.idempotency_key === key)).toHaveLength(1);
+    expect(await snapshot(fresh.sellerId)).toEqual(state);
 
-    // The key with another payload, or for another command, conflicts and changes nothing.
-    const otherItem = await newItem(sellerA.sellerId);
-    const otherPayload = await create(sessionA, key, { inventoryItemId: otherItem.id });
-    expect(otherPayload.statusCode).toBe(409);
-    expect(otherPayload.json()).toEqual({ error: 'idempotency_conflict' });
-    const otherCommand = await setPrice(sessionA, key, String(listing['id']), {
+    // The key with changed facts, with the facts reordered but equal, and for another command.
+    const changed = await create(session, key, { ...FACTS, acquisitionDate: '2026-01-16' });
+    expect(changed.statusCode).toBe(409);
+    expect(changed.json()).toEqual({ error: 'idempotency_conflict' });
+    const reordered = await create(session, key, {
+      acquisitionDate: FACTS.acquisitionDate,
+      acquisitionCost: { currency: 'CAD', amountMinor: FACTS.acquisitionCost.amountMinor },
+    });
+    expect(reordered.statusCode).toBe(201);
+    expect(reordered.body).toBe(first.body);
+    const otherCommand = await setPrice(session, key, String(listing['id']), {
       expectedRowVersion: 1,
       price: PRICE,
     });
     expect(otherCommand.statusCode).toBe(409);
-    expect(otherCommand.json()).toEqual({ error: 'idempotency_conflict' });
-    expect(await listingRows(sellerA.sellerId)).toEqual(rows);
-    // A second listing for an item that already carries a live one is a state conflict.
-    const duplicate = await create(sessionA, randomUUID(), { inventoryItemId: item.id });
-    expect(duplicate.statusCode).toBe(409);
-    expect(duplicate.json()).toEqual({ error: 'invalid_state' });
-    expect(await listingRows(sellerA.sellerId)).toEqual(rows);
+    expect(await snapshot(fresh.sellerId)).toEqual(state);
+
+    // Blank facts are allowed: unknown, never zero, never imputed.
+    const blank = created(await create(session, randomUUID(), {}));
+    expect((await itemRows(fresh.sellerId)).find((r) => r.id === blank.inventoryItemId)).toMatchObject({
+      acquisition_cost_minor: null,
+      acquisition_currency: null,
+      acquisition_date: null,
+    });
+    expect(await listingRows(fresh.sellerId)).toHaveLength(2);
+  });
+
+  it('rolls back the inventory item, the listing, the event and the receipt together when any of the four writes fails', async () => {
+    const session = remember(await signIn(harness, faulty));
+    const inject = async (table: string, condition: string) => {
+      await query(
+        env.superuserUrl,
+        `CREATE FUNCTION public.fail_listing_for_test() RETURNS trigger LANGUAGE plpgsql AS $$
+           BEGIN RAISE EXCEPTION 'injected failure'; END $$;
+         CREATE TRIGGER fail_listing_for_test BEFORE INSERT ON ${table}
+           FOR EACH ROW WHEN (${condition}) EXECUTE FUNCTION public.fail_listing_for_test();`,
+      );
+      return async () => {
+        await query(
+          env.superuserUrl,
+          `DROP TRIGGER fail_listing_for_test ON ${table}; DROP FUNCTION public.fail_listing_for_test();`,
+        );
+      };
+    };
+    const empty = { listings: [], items: [], events: [], receipts: [] };
+    const faults: [string, string, string][] = [
+      ['inventory insert', 'app.inventory_item', `NEW.seller_id = '${faulty.sellerId}'`],
+      ['listing insert after the item', 'app.listing', `NEW.seller_id = '${faulty.sellerId}'`],
+      [
+        'audit event after both records',
+        'app.audit_event',
+        `NEW.seller_id = '${faulty.sellerId}' AND NEW.event_type = 'LISTING_CREATED'`,
+      ],
+      ['receipt after records and event', 'app.idempotency_receipt', `NEW.seller_id = '${faulty.sellerId}'`],
+    ];
+    const key = randomUUID();
+    for (const [label, table, condition] of faults) {
+      const remove = await inject(table, condition);
+      try {
+        const res = await create(session, key, FACTS);
+        expect(res.statusCode, label).toBe(500);
+        expect(res.json(), label).toEqual({ error: 'internal' });
+      } finally {
+        await remove();
+      }
+      expect(await snapshot(faulty.sellerId), label).toEqual(empty);
+    }
+    // With the faults gone the same key creates once and then replays.
+    const ok = await create(session, key, FACTS);
+    expect(ok.statusCode).toBe(201);
+    expect((await create(session, key, FACTS)).body).toBe(ok.body);
+    const state = await snapshot(faulty.sellerId);
+    expect(state.items).toHaveLength(1);
+    expect(state.listings).toHaveLength(1);
+    expect(state.events).toHaveLength(1);
+    expect(state.receipts).toHaveLength(1);
+    expect(harness.logText()).toMatch(/"error_type":/);
   });
 
   it('sets the asking price with the expected version, replays the outcome exactly, and treats the same price as a no-op that consumes its key', async () => {
-    const item = await newItem(sellerA.sellerId);
-    const created = await create(sessionA, randomUUID(), { inventoryItemId: item.id });
-    const id = created.json<{ listing: { id: string } }>().listing.id;
+    const id = created(await create(sessionA, randomUUID())).id;
     const key = randomUUID();
     const first = await setPrice(sessionA, key, id, { expectedRowVersion: 1, price: PRICE });
     expect(first.statusCode).toBe(200);
@@ -371,7 +466,6 @@ describe('Seller listing routes (Slice 1e)', () => {
       currency: 'CAD',
       row_version: 2,
     });
-
     // Exact replay: identical body, no write, no version increment, no event.
     const replay = await setPrice(sessionA, key, id, { expectedRowVersion: 1, price: PRICE });
     expect(replay.statusCode).toBe(200);
@@ -382,7 +476,6 @@ describe('Seller listing routes (Slice 1e)', () => {
         (e) => e.subject_id === id && e.event_type === 'LISTING_ASKING_PRICE_CHANGED',
       ),
     ).toHaveLength(1);
-
     // The same price under a new key: the domain's no-op, 200 with the unchanged listing, no
     // write, no event, and (canonical rule of migration 0003) a consumed key with a stored outcome.
     const noOpKey = randomUUID();
@@ -395,12 +488,10 @@ describe('Seller listing routes (Slice 1e)', () => {
         (e) => e.subject_id === id && e.event_type === 'LISTING_ASKING_PRICE_CHANGED',
       ),
     ).toHaveLength(1);
-    const noOpReceipt = (await receipts(sellerA.sellerId)).filter((r) => r.idempotency_key === noOpKey);
-    expect(noOpReceipt).toHaveLength(1);
+    expect((await receipts(sellerA.sellerId)).filter((r) => r.idempotency_key === noOpKey)).toHaveLength(1);
     expect((await setPrice(sessionA, noOpKey, id, { expectedRowVersion: 2, price: PRICE })).body).toBe(
       noOp.body,
     );
-    // A later change under yet another key advances the version once more.
     const later = await setPrice(sessionA, randomUUID(), id, { expectedRowVersion: 2, price: OTHER_PRICE });
     expect(later.statusCode).toBe(200);
     expect(later.json<{ listing: { rowVersion: number; askingPrice: Money } }>().listing).toMatchObject({
@@ -409,11 +500,8 @@ describe('Seller listing routes (Slice 1e)', () => {
     });
   });
 
-  it('fails without mutation or success event on a stale version, a non-DRAFT state, an invalid currency, a fractional or negative amount, an unknown field or a malformed identifier', async () => {
-    const item = await newItem(sellerA.sellerId);
-    const id = (await create(sessionA, randomUUID(), { inventoryItemId: item.id })).json<{
-      listing: { id: string };
-    }>().listing.id;
+  it('fails without mutation or success event on a stale version, a non-DRAFT state, invalid facts or prices, unknown fields, malformed identifiers or a missing key', async () => {
+    const id = created(await create(sessionA, randomUUID())).id;
     expect(
       (await setPrice(sessionA, randomUUID(), id, { expectedRowVersion: 1, price: PRICE })).statusCode,
     ).toBe(200);
@@ -424,9 +512,7 @@ describe('Seller listing routes (Slice 1e)', () => {
         expectedRowVersion: ready.rowVersion,
       }),
     );
-    const rowsBefore = await listingRows(sellerA.sellerId);
-    const eventsBefore = await events(sellerA.sellerId);
-    const receiptsBefore = await receipts(sellerA.sellerId);
+    const before = await snapshot(sellerA.sellerId);
     const attempts: [string, Promise<LightMyRequestResponse>, number, string][] = [
       [
         'stale version',
@@ -468,7 +554,7 @@ describe('Seller listing routes (Slice 1e)', () => {
         'bad_request',
       ],
       [
-        'unknown field',
+        'unknown price field',
         setPrice(sessionA, randomUUID(), id, { expectedRowVersion: 2, price: PRICE, minimumPrice: PRICE }),
         400,
         'bad_request',
@@ -491,18 +577,33 @@ describe('Seller listing routes (Slice 1e)', () => {
         400,
         'idempotency_key_required',
       ],
+      ['create without key', create(sessionA, undefined, FACTS), 400, 'idempotency_key_required'],
       [
-        'create without key',
-        create(sessionA, undefined, { inventoryItemId: item.id }),
-        400,
-        'idempotency_key_required',
-      ],
-      [
-        'create malformed body',
-        create(sessionA, randomUUID(), { inventoryItemId: 'nope' }),
+        'create malformed date',
+        create(sessionA, randomUUID(), { acquisitionDate: '15/01/2026' }),
         400,
         'bad_request',
       ],
+      [
+        'create fractional cost',
+        create(sessionA, randomUUID(), { acquisitionCost: { amountMinor: 10.5, currency: 'CAD' } }),
+        400,
+        'bad_request',
+      ],
+      [
+        'create cost without currency',
+        create(sessionA, randomUUID(), { acquisitionCost: { amountMinor: 10 } }),
+        400,
+        'bad_request',
+      ],
+      [
+        'create unknown fact',
+        create(sessionA, randomUUID(), { acquisitionNote: 'from a fictional auction' }),
+        400,
+        'bad_request',
+      ],
+      ['create asking price', create(sessionA, randomUUID(), { askingPrice: PRICE }), 400, 'bad_request'],
+      ['create minimum price', create(sessionA, randomUUID(), { minimumPrice: PRICE }), 400, 'bad_request'],
       ['read malformed id', read(sessionA.token, 'not-a-uuid'), 400, 'bad_request'],
     ];
     for (const [label, pending, status, error] of attempts) {
@@ -510,92 +611,98 @@ describe('Seller listing routes (Slice 1e)', () => {
       expect(res.statusCode, label).toBe(status);
       expect(res.json(), label).toEqual({ error });
     }
-    expect(await listingRows(sellerA.sellerId)).toEqual(rowsBefore);
-    expect(await events(sellerA.sellerId)).toEqual(eventsBefore);
-    expect(await receipts(sellerA.sellerId)).toEqual(receiptsBefore);
+    expect(await snapshot(sellerA.sellerId)).toEqual(before);
   });
 
-  it('keeps tenants apart: seller B gets not_found for seller A’s listing and item exactly as for nothing, and leaves no trace of A in B’s events, receipts or rows', async () => {
-    const itemA = await newItem(sellerA.sellerId);
-    const idA = (await create(sessionA, randomUUID(), { inventoryItemId: itemA.id })).json<{
-      listing: { id: string };
-    }>().listing.id;
-    const rowsA = await listingRows(sellerA.sellerId);
-    const eventsA = await events(sellerA.sellerId);
+  it('keeps tenants apart: seller B gets not_found for seller A’s listing exactly as for nothing, cannot see A’s item under its own context, and leaves no trace of A on its side', async () => {
+    const made = created(await create(sessionA, randomUUID(), FACTS));
+    const stateA = await snapshot(sellerA.sellerId);
     const absent = randomUUID();
     const shape = (res: LightMyRequestResponse) =>
       `${res.statusCode}|${res.body}|${String(res.headers['content-type'])}|${String(res.headers['content-length'])}`;
-    // Read.
-    const readA = await read(sessionB.token, idA);
+    const readA = await read(sessionB.token, made.id);
     const readAbsent = await read(sessionB.token, absent);
     expect(readA.statusCode).toBe(404);
     expect(shape(readA)).toBe(shape(readAbsent));
-    // Price.
-    const priceA = await setPrice(sessionB, randomUUID(), idA, { expectedRowVersion: 1, price: PRICE });
+    const priceA = await setPrice(sessionB, randomUUID(), made.id, { expectedRowVersion: 1, price: PRICE });
     const priceAbsent = await setPrice(sessionB, randomUUID(), absent, {
       expectedRowVersion: 1,
       price: PRICE,
     });
     expect(priceA.statusCode).toBe(404);
     expect(shape(priceA)).toBe(shape(priceAbsent));
-    // Create against A's item, and against no item.
-    const createA = await create(sessionB, randomUUID(), { inventoryItemId: itemA.id });
-    const createAbsent = await create(sessionB, randomUUID(), { inventoryItemId: absent });
-    expect(createA.statusCode).toBe(404);
-    expect(shape(createA)).toBe(shape(createAbsent));
-    // Nothing of A moved, and nothing of A appears on B's side.
-    expect(await listingRows(sellerA.sellerId)).toEqual(rowsA);
-    expect(await events(sellerA.sellerId)).toEqual(eventsA);
-    expect(await listingRows(sellerB.sellerId)).toEqual([]);
-    expect(await receipts(sellerB.sellerId)).toEqual([]);
-    expect(JSON.stringify(await events(sellerB.sellerId))).not.toContain(idA);
+    // No existing item of any seller can be attached through the route.
+    expect((await create(sessionB, randomUUID(), { inventoryItemId: made.inventoryItemId })).statusCode).toBe(
+      400,
+    );
+    expect((await create(sessionA, randomUUID(), { inventoryItemId: made.inventoryItemId })).statusCode).toBe(
+      400,
+    );
+    // Under B's own tenant context A's item and listing do not exist.
+    const seenByB = await withTenant(harness.runtime.db, sellerB.sellerId, async (trx) => ({
+      item: await trx
+        .selectFrom('inventory_item')
+        .select('id')
+        .where('id', '=', made.inventoryItemId)
+        .executeTakeFirst(),
+      listing: await trx.selectFrom('listing').select('id').where('id', '=', made.id).executeTakeFirst(),
+    }));
+    expect(seenByB).toEqual({ item: undefined, listing: undefined });
+    expect(await snapshot(sellerA.sellerId)).toEqual(stateA);
+    const stateB = await snapshot(sellerB.sellerId);
+    expect(stateB.listings).toEqual([]);
+    expect(stateB.items).toEqual([]);
+    expect(stateB.receipts).toEqual([]);
+    expect(JSON.stringify(stateB.events)).not.toContain(made.id);
+    expect(JSON.stringify(stateB.events)).not.toContain(made.inventoryItemId);
     // A still reads and mutates its own listing.
-    expect((await read(sessionA.token, idA)).statusCode).toBe(200);
+    expect((await read(sessionA.token, made.id)).statusCode).toBe(200);
     expect(
-      (await setPrice(sessionA, randomUUID(), idA, { expectedRowVersion: 1, price: PRICE })).statusCode,
+      (await setPrice(sessionA, randomUUID(), made.id, { expectedRowVersion: 1, price: PRICE })).statusCode,
     ).toBe(200);
   });
 
-  it('rejects client-supplied seller, tenant, account and session identifiers and ignores identity headers', async () => {
-    const item = await newItem(sellerA.sellerId);
-    const rowsBefore = await listingRows(sellerA.sellerId);
+  it('rejects client-supplied inventory, seller, tenant, account, session and listing fields and ignores identity headers', async () => {
+    const before = await snapshot(sellerA.sellerId);
     for (const [label, payload] of [
-      ['sellerId', { inventoryItemId: item.id, sellerId: sellerB.sellerId }],
-      ['seller_id', { inventoryItemId: item.id, seller_id: sellerB.sellerId }],
-      ['tenantId', { inventoryItemId: item.id, tenantId: sellerB.sellerId }],
-      ['accountId', { inventoryItemId: item.id, accountId: sellerB.accountId }],
-      ['sessionId', { inventoryItemId: item.id, sessionId: randomUUID() }],
-      ['status', { inventoryItemId: item.id, status: 'LISTED' }],
-      ['rowVersion', { inventoryItemId: item.id, rowVersion: 7 }],
+      ['inventoryItemId', { inventoryItemId: randomUUID() }],
+      ['sellerId', { sellerId: sellerB.sellerId }],
+      ['seller_id', { seller_id: sellerB.sellerId }],
+      ['tenantId', { tenantId: sellerB.sellerId }],
+      ['accountId', { accountId: sellerB.accountId }],
+      ['sessionId', { sessionId: randomUUID() }],
+      ['status', { status: 'LISTED' }],
+      ['publicId', { publicId: 'abcdefghijklmnop' }],
+      ['accessCode', { accessCode: '123456' }],
+      ['rowVersion', { rowVersion: 7 }],
+      ['policyVersionId', { policyVersionId: randomUUID() }],
     ] as const) {
       const res = await create(sessionA, randomUUID(), payload);
       expect(res.statusCode, label).toBe(400);
       expect(res.json(), label).toEqual({ error: 'bad_request' });
     }
-    expect(await listingRows(sellerA.sellerId)).toEqual(rowsBefore);
-    // Identity headers change nothing: the tenant is the session's.
-    const spoofed = await create(
-      sessionA,
-      randomUUID(),
-      { inventoryItemId: item.id },
-      { 'x-seller-id': sellerB.sellerId, 'x-tenant-id': sellerB.sellerId },
-    );
+    expect(await snapshot(sellerA.sellerId)).toEqual(before);
+    // Identity headers change nothing: both records belong to the session's tenant.
+    const spoofed = await create(sessionA, randomUUID(), FACTS, {
+      'x-seller-id': sellerB.sellerId,
+      'x-tenant-id': sellerB.sellerId,
+    });
     expect(spoofed.statusCode).toBe(201);
-    const id = spoofed.json<{ listing: { id: string } }>().listing.id;
-    expect((await listingRows(sellerA.sellerId)).find((r) => r.id === id)?.seller_id).toBe(sellerA.sellerId);
+    const made = created(spoofed);
+    expect((await listingRows(sellerA.sellerId)).find((r) => r.id === made.id)?.seller_id).toBe(
+      sellerA.sellerId,
+    );
+    expect((await itemRows(sellerA.sellerId)).find((r) => r.id === made.inventoryItemId)?.seller_id).toBe(
+      sellerA.sellerId,
+    );
     expect(await listingRows(sellerB.sellerId)).toEqual([]);
+    expect(await itemRows(sellerB.sellerId)).toEqual([]);
   });
 
   it('leaves no tenant context on a reused pooled connection after create, read and asking-price requests', async () => {
     const one = await startAuthApp(env, { poolMax: 1 });
     try {
       const s = remember(await signIn(one, sellerA));
-      const item = await withTenant(one.runtime.db, sellerA.sellerId, (trx) =>
-        listings.createInventoryItem(trx, {
-          sellerId: sellerA.sellerId,
-          requestId: `req-item-${randomUUID()}`,
-        }),
-      );
       const connectionState = () =>
         one.runtime.db.transaction().execute(async (trx) => {
           const value = await sql<{ setting: string | null; seller: string | null }>`
@@ -603,32 +710,24 @@ describe('Seller listing routes (Slice 1e)', () => {
             trx,
           );
           const visible = await sql<{ n: string }>`select count(*)::text as n from app.listing`.execute(trx);
+          const items = await sql<{ n: string }>`select count(*)::text as n from app.inventory_item`.execute(
+            trx,
+          );
           return {
             setting: value.rows[0]?.setting ?? '',
             seller: value.rows[0]?.seller ?? null,
-            visible: Number(visible.rows[0]?.n),
+            visible: Number(visible.rows[0]?.n) + Number(items.rows[0]?.n),
           };
         });
-      const created = await one.app.inject({
-        method: 'POST',
-        url: LISTINGS,
-        headers: { ...withKey(randomUUID()).headers, [auth.ANTI_FORGERY_HEADER]: s.antiForgery },
-        cookies: { [one.cookieName]: s.token },
-        payload: { inventoryItemId: item.id },
-      });
-      expect(created.statusCode).toBe(201);
+      const made = await create(s, randomUUID(), FACTS, {}, one);
+      expect(made.statusCode).toBe(201);
       expect(await connectionState()).toEqual({ setting: '', seller: null, visible: 0 });
-      const id = created.json<{ listing: { id: string } }>().listing.id;
+      const id = created(made).id;
       expect((await get(one, `${LISTINGS}/${id}`, s.token)).statusCode).toBe(200);
       expect(await connectionState()).toEqual({ setting: '', seller: null, visible: 0 });
-      const priced = await one.app.inject({
-        method: 'PATCH',
-        url: `${LISTINGS}/${id}/asking-price`,
-        headers: { ...withKey(randomUUID()).headers, [auth.ANTI_FORGERY_HEADER]: s.antiForgery },
-        cookies: { [one.cookieName]: s.token },
-        payload: { expectedRowVersion: 1, price: PRICE },
-      });
-      expect(priced.statusCode).toBe(200);
+      expect(
+        (await setPrice(s, randomUUID(), id, { expectedRowVersion: 1, price: PRICE }, {}, one)).statusCode,
+      ).toBe(200);
       expect(await connectionState()).toEqual({ setting: '', seller: null, visible: 0 });
     } finally {
       await one.close();
@@ -637,7 +736,7 @@ describe('Seller listing routes (Slice 1e)', () => {
 
   it('exposes no seller, account, session, policy, receipt, audit or secret field in any response, and logs no cookie, token, anti-forgery value, price floor or body', () => {
     const forbidden =
-      /seller_?id|tenant|account_?id|session_?id|minimum|target|policy|receipt|fingerprint|audit|token|hash|code|secret|cookie/i;
+      /seller_?id|tenant|account_?id|session_?id|minimum|target|policy|receipt|fingerprint|audit|token|hash|code|secret|cookie|acquisition/i;
     for (const body of responses) {
       if (!body) continue;
       const parsed = JSON.parse(body) as Record<string, unknown>;
@@ -661,6 +760,6 @@ describe('Seller listing routes (Slice 1e)', () => {
     expect(log).not.toContain('"amountMinor"');
     expect(log).not.toContain(`"amountMinor":${FIXTURE.minimumPrice.amountMinor}`);
     expect(log).not.toMatch(/minimum_?price/i);
-    expect(log).not.toContain('inventoryItemId');
+    expect(log).not.toContain('acquisitionDate');
   });
 });

@@ -3,11 +3,13 @@
 // through the Listing Content and Seller Policy modules' interfaces; it never calls a model.
 export { LISTING_STATUSES, LISTING_TRANSITIONS, isListingTransitionAllowed } from './lifecycle.ts';
 export {
+  CreateListingWithItemInputSchema,
   approveContent,
   archiveListing,
   cancelListing,
   createInventoryItem,
   createListing,
+  createListingWithItem,
   expireListing,
   getListing,
   markListed,
@@ -18,6 +20,7 @@ export {
   setAskingPrice,
   setPolicy,
   type CloseListingResult,
+  type CreateListingWithItemInput,
   type InventoryItemRecord,
   type ListingRecord,
   type MarkListedResult,
