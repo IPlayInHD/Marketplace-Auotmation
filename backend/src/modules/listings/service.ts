@@ -1,3 +1,4 @@
+import { sql } from 'kysely';
 import { z } from 'zod';
 import { SQLSTATE } from '../../db/constants.ts';
 import type { TenantTransaction } from '../../db/kysely.ts';
@@ -10,6 +11,7 @@ import {
   mapDatabaseError,
   NotFoundError,
   RelistContentRequiredError,
+  ValidationError,
   type ReadinessGap,
 } from '../../shared/errors.ts';
 import { parseBuyerOrigin } from '../../shared/buyer-url.ts';
@@ -431,6 +433,142 @@ export async function getListingWorkspace(
   const facts = await content.listFacts(trx, listing.id);
   const draft = await content.getLatestVersion(trx, listing.id);
   return { listing, facts, draft: draft ?? null };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Dashboard reads (Slice 1i). Read-only: no command context, no receipt, no event, no state
+// change. Every read runs inside the caller's tenant transaction under forced row-level security,
+// so another tenant's listing is exactly as absent as one that does not exist (AUTH-221).
+
+/** OPS-721: the page-size contract of every list read in this module, clamped, never exceeded. */
+export const LISTING_PAGE_DEFAULT = 20;
+export const LISTING_PAGE_MAX = 100;
+/** OPS-721, TM-84: every list query runs under a transaction-local server-side statement timeout. */
+export const LIST_QUERY_TIMEOUT_MS = 5_000;
+
+async function boundListQuery(trx: TenantTransaction): Promise<void> {
+  await sql`select set_config('statement_timeout', ${String(LIST_QUERY_TIMEOUT_MS)}, true)`.execute(trx);
+}
+
+function pageLimit(limit: number): number {
+  if (!Number.isInteger(limit) || limit < 1) throw new ValidationError('page size');
+  return Math.min(limit, LISTING_PAGE_MAX);
+}
+
+/**
+ * The position a listing page continues after: the creation time as PostgreSQL renders it (exact
+ * to the microsecond, so equality holds where a JavaScript Date would round) and the listing id
+ * as the unique tie-breaker. Both are validated before they reach a query.
+ */
+export const ListingPositionSchema = z.strictObject({
+  createdAt: z
+    .string()
+    .max(64)
+    .regex(/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d{1,6})?([+-]\d{2}(:?\d{2})?|Z)$/),
+  id: z.uuid(),
+});
+export type ListingPosition = z.output<typeof ListingPositionSchema>;
+
+export interface ListListingsInput {
+  /** Exact canonical status to keep; every status when absent. */
+  status?: ListingStatus;
+  limit: number;
+  after?: ListingPosition;
+}
+export interface ListingPage {
+  listings: ListingRecord[];
+  /** The position the next page continues after, or null when this page ends the enumeration. */
+  next: ListingPosition | null;
+}
+
+/**
+ * The seller's own listings, newest first by creation time with the id as tie-breaker, in fixed
+ * pages (OPS-721). Creation time never changes (the listing guard refuses it), so a position stays
+ * valid however the listings are edited; the keyset predicate `(created_at, id) < position` can
+ * neither repeat nor skip a row when several listings share one timestamp.
+ */
+export async function listListings(trx: TenantTransaction, input: ListListingsInput): Promise<ListingPage> {
+  const limit = pageLimit(input.limit);
+  const after = input.after === undefined ? undefined : ListingPositionSchema.parse(input.after);
+  await boundListQuery(trx);
+  let query = trx
+    .selectFrom('listing')
+    .selectAll()
+    .select(sql<string>`created_at::text`.as('created_at_text'));
+  if (input.status !== undefined) query = query.where('status', '=', input.status);
+  if (after !== undefined) {
+    query = query.where(
+      sql<boolean>`(created_at, id) < (${after.createdAt}::timestamptz, ${after.id}::uuid)`,
+    );
+  }
+  const rows = await query
+    .orderBy('created_at', 'desc')
+    .orderBy('id', 'desc')
+    .limit(limit + 1)
+    .execute();
+  const shown = rows.slice(0, limit);
+  const last = shown[shown.length - 1];
+  return {
+    listings: shown.map(toListing),
+    next: rows.length > limit && last ? { createdAt: last.created_at_text, id: last.id } : null,
+  };
+}
+
+export interface CurrentPolicy {
+  listing: ListingRecord;
+  /** The bound immutable policy version, or null while the seller has stated none (never a zero). */
+  policyVersion: policy.PolicyVersionRecord | null;
+}
+
+/**
+ * The listing's current policy version as the owning seller reads it back (LIST-133 AC3): the
+ * version bound as current, the seller-entered minimum included, or null when none is bound.
+ * Nothing is computed; the record is the seller's own statement.
+ */
+export async function getCurrentPolicy(trx: TenantTransaction, listingId: string): Promise<CurrentPolicy> {
+  const listing = await getListing(trx, listingId);
+  const policyVersion =
+    listing.currentPolicyVersionId === null
+      ? null
+      : await policy.getPolicyVersion(trx, listing.id, listing.currentPolicyVersionId);
+  return { listing, policyVersion };
+}
+
+export interface ContentHistoryInput {
+  listingId: string;
+  limit: number;
+  /** Continue with the versions numbered below this one. */
+  belowVersionNumber?: number;
+}
+export interface ContentHistory {
+  listing: ListingRecord;
+  versions: content.ContentVersionRecord[];
+  nextBelow: number | null;
+}
+
+/**
+ * The listing's immutable version history, newest first (Listing Content module, DM-06). The
+ * listing is resolved first so a foreign or nonexistent listing is not found before any version
+ * is read (AUTH-221). Paged on the version number (OPS-721).
+ */
+export async function getContentHistory(
+  trx: TenantTransaction,
+  input: ContentHistoryInput,
+): Promise<ContentHistory> {
+  const limit = pageLimit(input.limit);
+  if (
+    input.belowVersionNumber !== undefined &&
+    !(Number.isInteger(input.belowVersionNumber) && input.belowVersionNumber >= 1)
+  ) {
+    throw new ValidationError('page position');
+  }
+  const listing = await getListing(trx, input.listingId);
+  await boundListQuery(trx);
+  const page = await content.listVersions(trx, listing.id, {
+    limit,
+    ...(input.belowVersionNumber === undefined ? {} : { belowVersionNumber: input.belowVersionNumber }),
+  });
+  return { listing, ...page };
 }
 
 /** The HTTP body of a fact replacement: the row version the seller read and the complete fact statement. */

@@ -1,11 +1,13 @@
-import type { FastifyPluginCallback } from 'fastify';
+import type { FastifyPluginCallback, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import type * as auth from '../../modules/identity-auth/index.ts';
 import type * as content from '../../modules/listing-content/index.ts';
 import * as listings from '../../modules/listings/index.ts';
 import type * as policy from '../../modules/seller-policy/index.ts';
 import { commandContext } from '../../shared/command.ts';
+import { ValidationError } from '../../shared/errors.ts';
 import { MoneySchema, type Money } from '../../shared/money.ts';
+import { decodeCursor, encodeCursor, pageSizeSchema } from '../../shared/pagination.ts';
 import type { RouteDeclaration } from '../authorization.ts';
 import { provenToken, requiredIdempotencyKey } from './seller-request.ts';
 
@@ -13,8 +15,9 @@ import { provenToken, requiredIdempotencyKey } from './seller-request.ts';
 // price), Slice 1f under D-21 (replace its seller-provided facts, save a seller-authored draft,
 // and read the workspace those two produce), Slice 1g (approve one seller draft as the single
 // approved version, LIST-105 and LIST-108) and Slice 1h (state the private minimum price and the
-// negotiation rules, LIST-131 and LIST-132, and move between DRAFT and READY, LIST-134). Creation
-// is the seller's one action of LIST-100 AC1,
+// negotiation rules, LIST-131 and LIST-132, and move between DRAFT and READY, LIST-134) and Slice 1i
+// (three read-only dashboard reads: enumerate the seller's listings, read the current private
+// policy, read the immutable version history). Creation is the seller's one action of LIST-100 AC1,
 // the composite command `listing.create_with_item` that creates the inventory item and its DRAFT
 // listing in one transaction under one receipt; every other mutation is the HTTP form of one
 // domain command each, and none of the routes changes a command's semantics. Identity comes from
@@ -49,6 +52,40 @@ const TransitionBody = z.strictObject({ expectedRowVersion: z.number().int().min
  * a target, suggested or asking price is refused here, as is any identity or status field.
  */
 const SetPolicyBody = listings.SetPolicyInputSchema;
+
+/**
+ * The page-size contract of every list read (OPS-721): a plain decimal, default 20, clamped to
+ * 100 rather than refused. Cursors are opaque, bounded and strictly validated before any query.
+ */
+const PageSize = pageSizeSchema(listings.LISTING_PAGE_DEFAULT, listings.LISTING_PAGE_MAX);
+const CursorText = z.string().min(1).max(512);
+/** Enumeration: an optional exact canonical status, the page size and the cursor. Nothing else. */
+const ListListingsQuery = z.strictObject({
+  status: z.enum(listings.LISTING_STATUSES).optional(),
+  limit: PageSize,
+  cursor: CursorText.optional(),
+});
+/** History: the page size and the cursor. Nothing else. */
+const ContentHistoryQuery = z.strictObject({ limit: PageSize, cursor: CursorText.optional() });
+/** The policy read takes no query at all; any parameter is refused. */
+const NoQuery = z.strictObject({});
+/**
+ * A listing-page cursor binds the filter it was issued under, so a page cannot continue a
+ * different enumeration; the tenant is never inside it, since the session bounds every page.
+ */
+const ListingCursor = z.strictObject({
+  v: z.literal(1),
+  kind: z.literal('listings'),
+  status: z.enum(listings.LISTING_STATUSES).nullable(),
+  position: listings.ListingPositionSchema,
+});
+/** A history cursor binds the listing it pages, and the version number it continues below. */
+const ContentCursor = z.strictObject({
+  v: z.literal(1),
+  kind: z.literal('content_versions'),
+  listingId: z.uuid(),
+  below: z.number().int().min(1),
+});
 
 /**
  * Exactly the seller-supplied inventory facts the composite creation command accepts (LIST-100
@@ -361,6 +398,47 @@ export const SELLER_LISTING_DECLARATIONS = {
     failure:
       '401 unauthenticated; 403 forbidden_origin or forbidden_anti_forgery; 400 bad_request or idempotency_key_required; 404 not_found; 409 invalid_state, stale_row_version or idempotency_conflict',
   },
+  listListings: {
+    actor: 'seller',
+    resource: 'listing',
+    action: 'list',
+    authentication: 'seller-session',
+    authorization:
+      'the live session names the tenant; row-level security bounds every page to that tenant, whatever cursor or filter is presented, so no other seller’s listing is ever enumerated',
+    tenantSource: 'session',
+    classification: 'read-only',
+    idempotency: 'none; no Idempotency-Key',
+    audit: 'none',
+    failure:
+      '401 unauthenticated; 400 bad_request for an unknown query parameter, a malformed status, page size or cursor, or a cursor issued under another filter',
+  },
+  readPolicy: {
+    actor: 'seller',
+    resource: 'seller_policy_version',
+    action: 'read_current_policy',
+    authentication: 'seller-session',
+    authorization:
+      'the live session names the tenant; the listing must be the tenant’s own, or it is not found; the answer is the bound immutable policy version the seller entered, the private minimum included (LIST-133 AC3), or null when none is bound; nothing is computed, suggested or recommended',
+    tenantSource: 'session',
+    classification: 'read-only',
+    idempotency: 'none; no Idempotency-Key',
+    audit: 'none',
+    failure: '401 unauthenticated; 400 bad_request for a malformed identifier; 404 not_found',
+  },
+  readContentHistory: {
+    actor: 'seller',
+    resource: 'listing_content_version',
+    action: 'read_history',
+    authentication: 'seller-session',
+    authorization:
+      'the live session names the tenant; the listing must be the tenant’s own, or it is not found; every immutable version is returned with its words, status, provenance and lineage, and no approver, tenant, audit, receipt or policy datum; reading moves nothing',
+    tenantSource: 'session',
+    classification: 'read-only',
+    idempotency: 'none; no Idempotency-Key',
+    audit: 'none',
+    failure:
+      '401 unauthenticated; 400 bad_request for a malformed identifier, page size or cursor, or a cursor issued for another listing; 404 not_found',
+  },
 } as const satisfies Record<string, RouteDeclaration>;
 
 export function registerSellerListingRoutes(
@@ -576,6 +654,101 @@ export function registerSellerListingRoutes(
         ),
       );
       return reply.code(200).send({ listing: presentListing(listing) });
+    },
+  );
+  // Slice 1i: three read-only dashboard reads. No key, no receipt, no event, no state change; a
+  // private answer that no shared cache may store (`Cache-Control: no-store`). Each runs inside
+  // withSellerSession under forced row-level security, so a foreign listing is not found.
+  const privateRead = (reply: FastifyReply) => reply.code(200).header('cache-control', 'no-store');
+
+  // GET: the seller's own listings, newest first, in fixed pages (OPS-721). The seller-safe
+  // listing view only: no minimum, no words, no facts, no policy, no cost.
+  app.get(
+    '/listings',
+    { config: { authorization: 'seller-session', declaration: SELLER_LISTING_DECLARATIONS.listListings } },
+    async (request, reply) => {
+      const token = provenToken(request, cookieName);
+      const query = ListListingsQuery.parse(request.query);
+      const status = query.status ?? null;
+      let after: listings.ListingPosition | undefined;
+      if (query.cursor !== undefined) {
+        const cursor = decodeCursor(ListingCursor, query.cursor);
+        if (cursor.status !== status) throw new ValidationError('cursor');
+        after = cursor.position;
+      }
+      const page = await options.auth.withSellerSession(token, (trx) =>
+        listings.listListings(trx, {
+          limit: query.limit,
+          ...(status === null ? {} : { status }),
+          ...(after === undefined ? {} : { after }),
+        }),
+      );
+      return privateRead(reply).send({
+        listings: page.listings.map(presentListing),
+        nextCursor:
+          page.next === null ? null : encodeCursor({ v: 1, kind: 'listings', status, position: page.next }),
+      });
+    },
+  );
+
+  // GET: the current private policy, to its owner only (LIST-133 AC3), in exactly the shape the
+  // PUT answers; null while no version is bound. Never a computed or suggested value.
+  app.get(
+    '/listings/:listingId/policy',
+    { config: { authorization: 'seller-session', declaration: SELLER_LISTING_DECLARATIONS.readPolicy } },
+    async (request, reply) => {
+      const token = provenToken(request, cookieName);
+      const params = ListingParams.parse(request.params);
+      NoQuery.parse(request.query);
+      const current = await options.auth.withSellerSession(token, (trx) =>
+        listings.getCurrentPolicy(trx, params.listingId),
+      );
+      return privateRead(reply).send({
+        listing: presentListing(current.listing),
+        policyVersion: current.policyVersion === null ? null : presentPolicy(current.policyVersion),
+      });
+    },
+  );
+
+  // GET: the immutable version history, newest first, in fixed pages; each entry is the seller's
+  // view of a content version (words, status, provenance, lineage, times; no approver identifier).
+  app.get(
+    '/listings/:listingId/content-versions',
+    {
+      config: {
+        authorization: 'seller-session',
+        declaration: SELLER_LISTING_DECLARATIONS.readContentHistory,
+      },
+    },
+    async (request, reply) => {
+      const token = provenToken(request, cookieName);
+      const params = ListingParams.parse(request.params);
+      const query = ContentHistoryQuery.parse(request.query);
+      let below: number | undefined;
+      if (query.cursor !== undefined) {
+        const cursor = decodeCursor(ContentCursor, query.cursor);
+        if (cursor.listingId !== params.listingId) throw new ValidationError('cursor');
+        below = cursor.below;
+      }
+      const history = await options.auth.withSellerSession(token, (trx) =>
+        listings.getContentHistory(trx, {
+          listingId: params.listingId,
+          limit: query.limit,
+          ...(below === undefined ? {} : { belowVersionNumber: below }),
+        }),
+      );
+      return privateRead(reply).send({
+        versions: history.versions.map(presentDraft),
+        nextCursor:
+          history.nextBelow === null
+            ? null
+            : encodeCursor({
+                v: 1,
+                kind: 'content_versions',
+                listingId: params.listingId,
+                below: history.nextBelow,
+              }),
+      });
     },
   );
 }

@@ -343,8 +343,57 @@ replayed after a later revert still answers `READY` while the listing is `DRAFT`
 holds for a revert key. Another listing, row version, payload or command under the same key is
 `409 idempotency_conflict`. Test suite: `test/integration/seller-readiness.test.ts`.
 
-Not here, by design: a policy read-back or explanation route (`LIST-133`), a target price, a
-listing-level minimum, publication, relisting, buyer surfaces.
+Not here, by design: a policy explanation route (`LIST-133` AC1), a target price, a
+listing-level minimum, publication, relisting, buyer surfaces. The policy read-back is Slice 1i.
+
+## Slice 1i: seller dashboard reads
+
+Three read-only routes for a future seller dashboard, registered by
+`src/web/routes/seller-listings.ts` under the same session and RLS rules as every other seller
+route: enumerate the seller's own listings, read the current private policy of one listing, and
+read the immutable content-version history of one listing. None takes an `Idempotency-Key`, writes
+a receipt, writes an audit event or changes any state; each answers `Cache-Control: no-store`, so no
+shared cache stores a private response. GET needs no origin or anti-forgery proof (`SEC-311` binds
+state-changing methods only). Nothing here publishes, lists, relists, enhances, prices or reaches a
+buyer.
+
+| Route                                              | Declaration                                                                                             | Request                                                                          | Success                          |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------- |
+| `GET /seller/listings`                             | seller · listing · list · seller-session · tenant from session · read-only · no key · no event          | `?status=<canonical status>` optional, `?limit=<1..100>` default 20, `?cursor=…` | `200 { listings, nextCursor }`   |
+| `GET /seller/listings/:listingId/policy`           | seller · seller_policy_version · read_current_policy · seller-session · tenant from session · read-only | none                                                                             | `200 { listing, policyVersion }` |
+| `GET /seller/listings/:listingId/content-versions` | seller · listing_content_version · read_history · seller-session · tenant from session · read-only      | `?limit=<1..100>` default 20, `?cursor=…`                                        | `200 { versions, nextCursor }`   |
+
+**Enumeration (OPS-721, TM-84).** Only the caller's listings, each in the seller-safe listing view
+(`id`, `inventoryItemId`, `status`, `askingPrice`, `rowVersion`, `createdAt`, `updatedAt`,
+`listedAt`, `closedAt`): no minimum price, no words, no facts, no policy, no acquisition cost.
+Deterministic keyset order, newest first by `created_at` with `id` descending as the unique
+tie-breaker, so listings created in one transaction (equal timestamps) are neither repeated nor
+skipped. Pages are fixed: `limit` is a plain decimal, default 20, clamped to 100 rather than
+refused (an oversized request is clamped, not honoured), and every enumeration runs under a
+transaction-local server-side statement timeout of 5 s. `status` is an exact canonical listing
+status; there is no search, sort choice, offset or analytics. `nextCursor` is opaque: base64url of
+a strictly validated document naming the position after the page and the filter it was issued
+under. A cursor under another filter, a malformed cursor, a malformed page size, an unknown query
+parameter or a repeated parameter is `400 bad_request` with no detail. A cursor carries no tenant:
+row-level security bounds every page to the session's seller, whoever presents it.
+
+**Policy read-back (LIST-133 AC3, D-04).** `policyVersion` is exactly the object the policy PUT
+answers, the seller-entered minimum included, for the version bound as current; `null` while no
+version is bound (never a zero, never a suggestion). The minimum appears in this response only:
+not in the enumeration, the workspace, an event, a receipt, an error, a log or a buyer-safe
+projection. Reading the policy needs no particular listing state.
+
+**Content history (DM-06, SM-CT-02).** Every immutable version of the listing, newest first by
+`versionNumber`, paged like the enumeration; each entry is the seller's view of a version (`id`,
+`versionNumber`, `status`, `provenance`, `title`, `summary`, `description`, `structuredDetails`,
+`sourceVersionId`, `createdAt`, `approvedAt`), never an approver identifier. A `SELLER_DRAFT`
+entry's id can be handed to the approval route. Reading moves nothing: no status, pointer or
+approval changes. The listing is resolved first, so a foreign or nonexistent listing is
+`404 not_found` before any version is read (`AUTH-221`).
+
+Test suite: `test/integration/seller-dashboard-reads.test.ts`. Not here, by design: a policy
+explanation (`LIST-133` AC1), search, sorting choices, offset pagination, analytics, exports,
+buyer surfaces.
 
 ## Environment variables
 

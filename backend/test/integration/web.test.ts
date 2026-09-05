@@ -34,7 +34,7 @@ describe('Web process', () => {
     expect(res.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
   });
 
-  it('registers exactly the fifteen declared seller routes, each with its complete canonical AUTH-222 declaration, and no buyer route', async () => {
+  it('registers exactly the eighteen declared seller routes, each with its complete canonical AUTH-222 declaration, and no buyer route', async () => {
     const listingPrefix = `${ROUTE_PREFIXES.seller}/listings`;
     expect(declaredRoutes(harness.app)).toEqual([
       {
@@ -127,7 +127,35 @@ describe('Web process', () => {
         authorization: 'seller-session',
         declaration: SELLER_LISTING_DECLARATIONS.revertToDraft,
       },
+      {
+        method: 'GET',
+        url: listingPrefix,
+        authorization: 'seller-session',
+        declaration: SELLER_LISTING_DECLARATIONS.listListings,
+      },
+      {
+        method: 'GET',
+        url: `${listingPrefix}/:listingId/policy`,
+        authorization: 'seller-session',
+        declaration: SELLER_LISTING_DECLARATIONS.readPolicy,
+      },
+      {
+        method: 'GET',
+        url: `${listingPrefix}/:listingId/content-versions`,
+        authorization: 'seller-session',
+        declaration: SELLER_LISTING_DECLARATIONS.readContentHistory,
+      },
     ]);
+    // Every read route is declared read-only with no key and no event (Slice 1i).
+    for (const declaration of [
+      SELLER_LISTING_DECLARATIONS.listListings,
+      SELLER_LISTING_DECLARATIONS.readPolicy,
+      SELLER_LISTING_DECLARATIONS.readContentHistory,
+    ]) {
+      expect(declaration.classification).toBe('read-only');
+      expect(declaration.idempotency).toBe('none; no Idempotency-Key');
+      expect(declaration.audit).toBe('none');
+    }
     // Every declaration states every required field, and the tenant never comes from the request.
     for (const route of declaredRoutes(harness.app)) {
       for (const field of ROUTE_DECLARATION_FIELDS) {
@@ -159,6 +187,12 @@ describe('Web process', () => {
       `${listingPrefix}/:listingId/price-suggestion`,
       `${listingPrefix}/:listingId/valuation`,
       `${listingPrefix}/:listingId/policy/explain`,
+      `${listingPrefix}/:listingId/content-versions/:contentVersionId`,
+      `${listingPrefix}/:listingId/history`,
+      `${listingPrefix}/search`,
+      `${listingPrefix}/export`,
+      `${ROUTE_PREFIXES.seller}/dashboard`,
+      `${ROUTE_PREFIXES.seller}/analytics`,
       `${ROUTE_PREFIXES.seller}`,
       `${AUTH_PREFIX}/sign-up`,
       `${AUTH_PREFIX}/reset`,
@@ -185,9 +219,17 @@ describe('Web process', () => {
     }
     const policyUrl = `${listingPrefix}/:listingId/policy`;
     expect(harness.app.hasRoute({ method: 'PUT', url: policyUrl })).toBe(true);
-    for (const method of ['GET', 'POST', 'PATCH', 'DELETE'] as const)
+    expect(harness.app.hasRoute({ method: 'GET', url: policyUrl })).toBe(true);
+    for (const method of ['POST', 'PATCH', 'DELETE'] as const)
       expect(harness.app.hasRoute({ method, url: policyUrl }), `${method} ${policyUrl}`).toBe(false);
-    expect(harness.app.hasRoute({ method: 'GET', url: listingPrefix })).toBe(false);
+    // The dashboard reads are GET only; the collection accepts POST (create) and GET (enumerate).
+    const historyUrl = `${listingPrefix}/:listingId/content-versions`;
+    expect(harness.app.hasRoute({ method: 'GET', url: historyUrl })).toBe(true);
+    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE'] as const)
+      expect(harness.app.hasRoute({ method, url: historyUrl }), `${method} ${historyUrl}`).toBe(false);
+    expect(harness.app.hasRoute({ method: 'GET', url: listingPrefix })).toBe(true);
+    for (const method of ['PUT', 'PATCH', 'DELETE'] as const)
+      expect(harness.app.hasRoute({ method, url: listingPrefix }), `${method} ${listingPrefix}`).toBe(false);
     for (const url of [`${ROUTE_PREFIXES.buyer}/abcdefghijklmnop`, `${listingPrefix}/x/publish`, '/signup']) {
       const res = await harness.app.inject({ method: 'GET', url });
       expect(res.statusCode, url).toBe(404);

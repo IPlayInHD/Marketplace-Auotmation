@@ -671,7 +671,8 @@ describe('Seller authentication foundation (D-19)', () => {
     for (const [method, url] of [
       ['POST', '/seller/auth/sign-up'],
       ['POST', '/seller/auth/reset'],
-      ['GET', '/seller/listings'],
+      ['GET', '/seller/dashboard'],
+      ['GET', '/seller/analytics'],
       ['DELETE', '/seller/listings/00000000-0000-4000-8000-000000000000'],
       ['POST', '/seller/listings/00000000-0000-4000-8000-000000000000/publish'],
     ] as const) {

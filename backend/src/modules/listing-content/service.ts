@@ -354,6 +354,41 @@ export async function getLatestVersion(
   return row ? toVersion(row) : undefined;
 }
 
+/** One page of a listing's version history, newest version number first, and the number to continue below. */
+export interface ContentVersionPage {
+  versions: ContentVersionRecord[];
+  /** The version number the next page starts below, or null when this page ends the history. */
+  nextBelow: number | null;
+}
+
+/**
+ * The listing's immutable content versions, every status included, ordered by version number
+ * descending: the newest first, the way getLatestVersion reads them, so a dashboard sees the
+ * current words at the top and the lineage beneath (DM-06, SM-CT-02). Keyset-paged on the
+ * version number, which is unique per listing, so a page can neither repeat nor skip a version.
+ * Reading changes nothing: no status, pointer or approval moves.
+ */
+export async function listVersions(
+  trx: TenantTransaction,
+  listingId: string,
+  page: { limit: number; belowVersionNumber?: number },
+): Promise<ContentVersionPage> {
+  let query = trx.selectFrom('listing_content_version').selectAll().where('listing_id', '=', listingId);
+  if (page.belowVersionNumber !== undefined) {
+    query = query.where('version_number', '<', page.belowVersionNumber);
+  }
+  const rows = await query
+    .orderBy('version_number', 'desc')
+    .limit(page.limit + 1)
+    .execute();
+  const shown = rows.slice(0, page.limit);
+  const last = shown[shown.length - 1];
+  return {
+    versions: shown.map(toVersion),
+    nextBelow: rows.length > page.limit && last ? last.version_number : null,
+  };
+}
+
 /** The copy a seller draft would carry, in the normalised form the domain stores. */
 export interface DraftCopy {
   title: string;
