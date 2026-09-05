@@ -3,6 +3,7 @@
 // protected (P3, D-04): it never appears in a buyer payload, a log or model context.
 // The pure decision engine (Module 11) is not part of this slice.
 export {
+  PolicyVersionInputSchema,
   createPolicyVersion,
   getPolicyVersion,
   type PolicyVersionInput,

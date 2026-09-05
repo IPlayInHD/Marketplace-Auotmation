@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type * as auth from '../../modules/identity-auth/index.ts';
 import type * as content from '../../modules/listing-content/index.ts';
 import * as listings from '../../modules/listings/index.ts';
+import type * as policy from '../../modules/seller-policy/index.ts';
 import { commandContext } from '../../shared/command.ts';
 import { MoneySchema, type Money } from '../../shared/money.ts';
 import type { RouteDeclaration } from '../authorization.ts';
@@ -10,16 +11,19 @@ import { provenToken, requiredIdempotencyKey } from './seller-request.ts';
 
 // The authenticated seller listing surface: Slice 1e (create a listing, read it, set its asking
 // price), Slice 1f under D-21 (replace its seller-provided facts, save a seller-authored draft,
-// and read the workspace those two produce) and Slice 1g (approve one seller draft as the single
-// approved version, LIST-105 and LIST-108). Creation is the seller's one action of LIST-100 AC1,
+// and read the workspace those two produce), Slice 1g (approve one seller draft as the single
+// approved version, LIST-105 and LIST-108) and Slice 1h (state the private minimum price and the
+// negotiation rules, LIST-131 and LIST-132, and move between DRAFT and READY, LIST-134). Creation
+// is the seller's one action of LIST-100 AC1,
 // the composite command `listing.create_with_item` that creates the inventory item and its DRAFT
 // listing in one transaction under one receipt; every other mutation is the HTTP form of one
 // domain command each, and none of the routes changes a command's semantics. Identity comes from
 // the session only (AUTH-220): every handler runs its command inside withSellerSession, the single
 // route-to-tenant construction site, under forced row-level security. Another tenant's listing is
 // exactly as absent as one that does not exist (AUTH-221). Nothing here lists, searches, deletes,
-// publishes, transitions, uploads, enhances, prices or exposes anything to a buyer, nothing
-// approves on the seller's behalf, and nothing rewrites a seller's words (LIST-006, D-12).
+// publishes, uploads, enhances or exposes anything to a buyer; nothing approves on the seller's
+// behalf, nothing rewrites a seller's words (LIST-006, D-12), and nothing computes, suggests or
+// recommends any price: every amount is typed by the seller (D-09, LIST-130, LIST-131).
 
 export interface SellerListingRoutesOptions {
   auth: auth.AuthService;
@@ -35,6 +39,16 @@ const ContentVersionParams = z.strictObject({ listingId: z.uuid(), contentVersio
  * no provenance and no identity; the authenticated request is the approval (LIST-105).
  */
 const ApproveContentBody = z.strictObject({ expectedRowVersion: z.number().int().min(1) });
+
+/** Exactly the domain representation of a lifecycle transition the seller requests: the row version read. */
+const TransitionBody = z.strictObject({ expectedRowVersion: z.number().int().min(1) });
+
+/**
+ * Exactly the domain representation of `listing.set_policy`: the row version read and the seller's
+ * complete rule set, the private minimum acceptable price included. Every value is the seller's;
+ * a target, suggested or asking price is refused here, as is any identity or status field.
+ */
+const SetPolicyBody = listings.SetPolicyInputSchema;
 
 /**
  * Exactly the seller-supplied inventory facts the composite creation command accepts (LIST-100
@@ -170,6 +184,42 @@ export function presentApprovedVersion(version: content.ContentVersionRecord): A
   };
 }
 
+/**
+ * The seller's own policy version as the seller reads it back from the policy route, and only
+ * there (LIST-133 AC3: shown to the seller, labelled as never shared with buyers). The minimum
+ * price is protected (P3, D-04): it is never part of the listing view, the workspace, a buyer
+ * projection, a log or an audit payload.
+ */
+export interface SellerPolicyView {
+  id: string;
+  versionNumber: number;
+  minimumPrice: Money;
+  negotiationEnabled: boolean;
+  maxAutonomousConcession: Money | null;
+  tradesAllowed: boolean;
+  deliveryAllowed: boolean;
+  pickupAllowed: boolean;
+  locationDisclosureMode: policy.PolicyVersionRecord['locationDisclosureMode'];
+  holdWindowSeconds: number | null;
+  createdAt: Date;
+}
+
+export function presentPolicy(version: policy.PolicyVersionRecord): SellerPolicyView {
+  return {
+    id: version.id,
+    versionNumber: version.versionNumber,
+    minimumPrice: version.minimumPrice,
+    negotiationEnabled: version.negotiationEnabled,
+    maxAutonomousConcession: version.maxAutonomousConcession,
+    tradesAllowed: version.tradesAllowed,
+    deliveryAllowed: version.deliveryAllowed,
+    pickupAllowed: version.pickupAllowed,
+    locationDisclosureMode: version.locationDisclosureMode,
+    holdWindowSeconds: version.holdWindowSeconds,
+    createdAt: version.createdAt,
+  };
+}
+
 /** The canonical AUTH-222 declarations of the listing routes, mirrored in the README inventory. */
 export const SELLER_LISTING_DECLARATIONS = {
   create: {
@@ -260,6 +310,54 @@ export const SELLER_LISTING_DECLARATIONS = {
       'Idempotency-Key required (client UUID); exact replay returns the stored listing and the stored approval marks of the exact version the receipt names, reading only its immutable words, never the latest version; a version already approved or superseded is refused under a new key',
     audit:
       'LISTING_CONTENT_APPROVED with the version number and the superseded version identifier, in the same transaction as the supersession, the approval marks and the listing update; no status event, because approval performs no listing transition',
+    failure:
+      '401 unauthenticated; 403 forbidden_origin or forbidden_anti_forgery; 400 bad_request or idempotency_key_required; 404 not_found; 409 invalid_state, stale_row_version or idempotency_conflict',
+  },
+  setPolicy: {
+    actor: 'seller',
+    resource: 'seller_policy_version',
+    action: 'set_policy',
+    authentication: 'seller-session',
+    authorization:
+      'the live session names the tenant; the listing must be DRAFT and carry the expected row version; the body is the seller-entered private minimum acceptable price and the negotiation rules, appended as a new immutable policy version and bound as the listing’s current one; nothing estimates, suggests or recommends a price (D-09, LIST-131, LIST-132)',
+    tenantSource: 'session',
+    classification: 'consequential',
+    idempotency:
+      'Idempotency-Key required (client UUID); exact replay returns the stored listing and re-reads the immutable policy version the receipt names; every valid statement appends a version',
+    audit:
+      'SELLER_POLICY_CHANGED with the policy version number, plus MINIMUM_PRICE_CHANGED when the minimum differs from the previous version, in the same transaction; neither carries an amount (D-04, OPS-569)',
+    failure:
+      '401 unauthenticated; 403 forbidden_origin or forbidden_anti_forgery; 400 bad_request or idempotency_key_required; 404 not_found; 409 invalid_state, stale_row_version or idempotency_conflict',
+  },
+  markReady: {
+    actor: 'seller',
+    resource: 'listing',
+    action: 'mark_ready',
+    authentication: 'seller-session',
+    authorization:
+      'the live session names the tenant; the listing must be DRAFT, carry the expected row version and satisfy every SM-L-01 prerequisite re-checked under the row lock: approved seller copy backed by seller facts, an asking price, and a current policy version carrying the seller’s minimum price in the same currency; the policy version bound is the listing’s current one, never chosen by the client',
+    tenantSource: 'session',
+    classification: 'consequential',
+    idempotency:
+      'Idempotency-Key required (client UUID); exact replay returns the stored listing as it was when READY was entered, whatever the listing has become since; a failed attempt consumes nothing',
+    audit:
+      'LISTING_STATUS_CHANGED from DRAFT to READY with the row version and the policy version in force, in the same transaction; no access code, publication or buyer record',
+    failure:
+      '401 unauthenticated; 403 forbidden_origin or forbidden_anti_forgery; 400 bad_request or idempotency_key_required; 404 not_found; 409 invalid_state naming the missing SM-L-01 prerequisites by fixed gap name, stale_row_version or idempotency_conflict',
+  },
+  revertToDraft: {
+    actor: 'seller',
+    resource: 'listing',
+    action: 'revert_to_draft',
+    authentication: 'seller-session',
+    authorization:
+      'the live session names the tenant; the listing must be READY and carry the expected row version; only the status moves, and the approved content, prices, policy version and facts all stand',
+    tenantSource: 'session',
+    classification: 'consequential',
+    idempotency:
+      'Idempotency-Key required (client UUID); exact replay returns the stored listing as it was when DRAFT was re-entered, whatever the listing has become since',
+    audit:
+      'LISTING_STATUS_CHANGED from READY to DRAFT with the row version and the policy version in force, in the same transaction',
     failure:
       '401 unauthenticated; 403 forbidden_origin or forbidden_anti_forgery; 400 bad_request or idempotency_key_required; 404 not_found; 409 invalid_state, stale_row_version or idempotency_conflict',
   },
@@ -410,6 +508,74 @@ export function registerSellerListingRoutes(
         listing: presentListing(result.listing),
         approvedContentVersion: presentApprovedVersion(result.version),
       });
+    },
+  );
+
+  // PUT: the body is the seller's complete rule set (LIST-131, LIST-132); the domain appends an
+  // immutable policy version (DM-06) and binds it as the listing's current one. The minimum price
+  // in the answer is the seller's own read-back (LIST-133 AC3) and travels nowhere else.
+  app.put(
+    '/listings/:listingId/policy',
+    { config: { authorization: 'seller-session', declaration: SELLER_LISTING_DECLARATIONS.setPolicy } },
+    async (request, reply) => {
+      const token = provenToken(request, cookieName);
+      const key = requiredIdempotencyKey(request);
+      const params = ListingParams.parse(request.params);
+      const { expectedRowVersion, ...rules } = SetPolicyBody.parse(request.body);
+      const result = await options.auth.withSellerSession(token, (trx, principal) =>
+        listings.setPolicy(
+          trx,
+          commandContext({ sellerId: principal.sellerId, requestId: request.id, idempotencyKey: key }),
+          { listingId: params.listingId, expectedRowVersion, policy: rules },
+        ),
+      );
+      return reply.code(200).send({
+        listing: presentListing(result.listing),
+        policyVersion: presentPolicy(result.policyVersion),
+      });
+    },
+  );
+
+  // POST: the seller declares the listing finished (LIST-134). The domain re-checks SM-L-01 under
+  // the row lock and refuses with the missing prerequisites named; success issues no access code.
+  app.post(
+    '/listings/:listingId/ready',
+    { config: { authorization: 'seller-session', declaration: SELLER_LISTING_DECLARATIONS.markReady } },
+    async (request, reply) => {
+      const token = provenToken(request, cookieName);
+      const key = requiredIdempotencyKey(request);
+      const params = ListingParams.parse(request.params);
+      const body = TransitionBody.parse(request.body);
+      const listing = await options.auth.withSellerSession(token, (trx, principal) =>
+        listings.markReady(
+          trx,
+          commandContext({ sellerId: principal.sellerId, requestId: request.id, idempotencyKey: key }),
+          { listingId: params.listingId, expectedRowVersion: body.expectedRowVersion },
+        ),
+      );
+      return reply.code(200).send({ listing: presentListing(listing) });
+    },
+  );
+
+  // POST: the seller reopens a READY listing for editing (LIST-134 AC3, STATE_MACHINES §1).
+  app.post(
+    '/listings/:listingId/revert-to-draft',
+    {
+      config: { authorization: 'seller-session', declaration: SELLER_LISTING_DECLARATIONS.revertToDraft },
+    },
+    async (request, reply) => {
+      const token = provenToken(request, cookieName);
+      const key = requiredIdempotencyKey(request);
+      const params = ListingParams.parse(request.params);
+      const body = TransitionBody.parse(request.body);
+      const listing = await options.auth.withSellerSession(token, (trx, principal) =>
+        listings.revertToDraft(
+          trx,
+          commandContext({ sellerId: principal.sellerId, requestId: request.id, idempotencyKey: key }),
+          { listingId: params.listingId, expectedRowVersion: body.expectedRowVersion },
+        ),
+      );
+      return reply.code(200).send({ listing: presentListing(listing) });
     },
   );
 }

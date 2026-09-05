@@ -5,7 +5,13 @@ import type { WriteContext } from '../../shared/command.ts';
 import { mapDatabaseError, NotFoundError } from '../../shared/errors.ts';
 import { MoneySchema, type Money } from '../../shared/money.ts';
 
-const PolicyVersionInputSchema = z.strictObject({
+/**
+ * The seller's own rule set (LIST-022, LIST-131, LIST-132, POLICY §3 as this slice fixes it): the
+ * private minimum acceptable price, the negotiation switch, the optional autonomous concession
+ * limit, the capability flags, the location disclosure mode and the optional hold window. Every
+ * value is typed by the seller; nothing here is derived, suggested or estimated (D-09).
+ */
+export const PolicyVersionInputSchema = z.strictObject({
   listingId: z.uuid(),
   minimumPrice: MoneySchema,
   negotiationEnabled: z.boolean(),

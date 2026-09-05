@@ -6,6 +6,7 @@ export {
   CreateListingWithItemInputSchema,
   ReplaceFactsInputSchema,
   SaveSellerDraftInputSchema,
+  SetPolicyInputSchema,
   approveContent,
   archiveListing,
   cancelListing,
@@ -31,5 +32,7 @@ export {
   type ListingWorkspace,
   type MarkListedResult,
   type SaveSellerDraftInput,
+  type SetPolicyInput,
+  type SetPolicyResult,
   type SellerDraftResult,
 } from './service.ts';

@@ -285,8 +285,66 @@ approval superseded it still answers `APPROVED`, byte for byte, and changes noth
 key with another listing, version, row version or command is `409 idempotency_conflict`. Test
 suite: `test/integration/seller-approval.test.ts`.
 
-Not here, by design: `READY`, publication, relisting, enhancement, editing or restoring a
-version, images, enumeration, buyer surfaces.
+Not here, by design: publication, relisting, enhancement, editing or restoring a version,
+images, enumeration, buyer surfaces. `READY` and the policy are Slice 1h.
+
+## Slice 1h: seller policy and readiness
+
+Three consequential routes exposing the existing `listing.set_policy`, `listing.mark_ready` and
+`listing.revert_to_draft` commands (`LIST-131` to `LIST-134`, `SM-L-01`, `STATE_MACHINES.md` §1),
+registered by `src/web/routes/seller-listings.ts` under the same session, origin, anti-forgery,
+key and RLS rules as every other mutation. Every amount is typed by the seller: nothing here or
+anywhere in this codebase computes, suggests, estimates or recommends a price (D-09, `OPS-725`;
+`test/unit/pricing-boundary.test.ts` scans the source for any such identifier).
+
+| Route                                              | Declaration                                                                                                                                                                           | Request                                                                                                                                                                                                                                                                                                                                                          | Success                          |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `PUT /seller/listings/:listingId/policy`           | seller · seller_policy_version · set_policy · seller-session · tenant from session · consequential · `Idempotency-Key` required · `SELLER_POLICY_CHANGED` (+ `MINIMUM_PRICE_CHANGED`) | `{ "expectedRowVersion": n, "minimumPrice": Money, "negotiationEnabled": bool, "maxAutonomousConcession"?: Money, "tradesAllowed": bool, "deliveryAllowed": bool, "pickupAllowed": bool, "locationDisclosureMode": "NONE" \| "AREA", "holdWindowSeconds"?: n }`; the concession shares the minimum's currency; no asking, target or suggested price, no identity | `200 { listing, policyVersion }` |
+| `POST /seller/listings/:listingId/ready`           | seller · listing · mark_ready · seller-session · tenant from session · consequential · `Idempotency-Key` required · `LISTING_STATUS_CHANGED`                                          | `{ "expectedRowVersion": n }`; the policy version bound is the listing's current one, never chosen by the client                                                                                                                                                                                                                                                 | `200 { listing }`                |
+| `POST /seller/listings/:listingId/revert-to-draft` | seller · listing · revert_to_draft · seller-session · tenant from session · consequential · `Idempotency-Key` required · `LISTING_STATUS_CHANGED`                                     | `{ "expectedRowVersion": n }`                                                                                                                                                                                                                                                                                                                                    | `200 { listing }`                |
+
+**Readiness matrix (SM-L-01).** Every prerequisite is the seller's to supply and reachable through
+the authenticated API; `READY` names what is missing by fixed gap name (`LIST-134` AC1):
+
+| Prerequisite                                   | Seller operation                                    | Gap name                                             |
+| ---------------------------------------------- | --------------------------------------------------- | ---------------------------------------------------- |
+| listing in `DRAFT` with a known row version    | `POST /seller/listings`, `GET /seller/listings/:id` | `409 invalid_state` (state), `409 stale_row_version` |
+| seller facts backing every approved detail     | `PUT …/facts`                                       | `seller_provided_facts`                              |
+| an approved seller content version             | `PUT …/draft` then `POST …/content/:v/approve`      | `approved_content`                                   |
+| an asking price                                | `PATCH …/asking-price`                              | `asking_price`                                       |
+| the private minimum price, in a policy version | `PUT …/policy`                                      | `minimum_price` together with `policy_version`       |
+| minimum and asking in one currency (`OPS-704`) | both of the above                                   | `currency_match`                                     |
+
+**Policy (LIST-131, LIST-132, D-04).** The body is the seller's complete rule set; the domain
+appends an immutable `SellerPolicyVersion` (`DM-06`), binds it as the listing's current policy
+and advances `row_version` once, writing `SELLER_POLICY_CHANGED` and, when the minimum differs
+from the previous version's, `MINIMUM_PRICE_CHANGED`, both carrying `policy_version_number` only.
+The listing must be `DRAFT`. The minimum acceptable price is protected (P3): it is answered to
+the seller in this route's `policyVersion` and nowhere else (`LIST-133` AC3), never in the listing
+view, the workspace, a buyer projection, a log, an audit payload or a receipt, whose outcome is
+the listing record and the policy version identifier. A replay re-reads the immutable version.
+
+**READY (LIST-134, SM-L-01).** The listing row is locked, the state and the expected row version
+are checked, and every prerequisite is re-evaluated in the transaction (the data-layer guard
+evaluates it once more on the write). Success moves `DRAFT → READY` once, advances `row_version`
+once and writes `LISTING_STATUS_CHANGED` with the policy version in force; it issues no access
+code and publishes nothing (`SM-L-02` is `markListed`, not exposed). A refusal is
+`409 { "error": "invalid_state", "missing": [...] }` with the gap names above, no write and no
+event, and the key is not consumed, so the same key succeeds once the gaps are closed. A listing
+already `READY`, or in any state other than `DRAFT`, is `409 invalid_state` without `missing`.
+
+**Revert (LIST-134 AC3).** `READY → DRAFT` only; the status and `row_version` move once, and the
+approved content, the asking price, the policy version and the facts all stand, so a later
+`READY` needs nothing new. A listing already `DRAFT` is `409 invalid_state`.
+
+**Replay.** Each route is one `runIdempotent` call and one receipt storing the listing record.
+A replay returns that record byte for byte, whatever the listing has become: a `READY` key
+replayed after a later revert still answers `READY` while the listing is `DRAFT`, and the reverse
+holds for a revert key. Another listing, row version, payload or command under the same key is
+`409 idempotency_conflict`. Test suite: `test/integration/seller-readiness.test.ts`.
+
+Not here, by design: a policy read-back or explanation route (`LIST-133`), a target price, a
+listing-level minimum, publication, relisting, buyer surfaces.
 
 ## Environment variables
 

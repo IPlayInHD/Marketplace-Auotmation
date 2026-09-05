@@ -98,9 +98,14 @@ export async function buildWebApp(options: WebAppOptions) {
     // conflict, a schema-level refusal is a bad request. None of them repeats a message.
     if (err instanceof NotFoundError) return reply.code(404).send(RESPONSES.notFound);
     if (err instanceof ConcurrentModificationError) return reply.code(409).send(RESPONSES.staleRowVersion);
+    // LIST-134 AC1: a READY refusal names the missing prerequisites, as the fixed gap names of
+    // SM-L-01 only (never a value, a price or a policy internal); the body is otherwise the
+    // established invalid_state, and only the owning tenant ever reaches it (AUTH-221).
+    if (err instanceof ListingNotReadyError) {
+      return reply.code(409).send({ ...RESPONSES.invalidState, missing: err.missing });
+    }
     if (
       err instanceof InvalidStateError ||
-      err instanceof ListingNotReadyError ||
       err instanceof PublicAccessRequiredError ||
       err instanceof RelistContentRequiredError
     ) {

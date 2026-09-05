@@ -689,6 +689,25 @@ export interface SetPolicyResult {
 }
 
 /**
+ * The HTTP body of a policy statement: the row version the seller read and the complete rule set,
+ * the private minimum acceptable price included. Strict: no asking, target or suggested price, no
+ * identity, no status. A concession limit must share the minimum's currency (OPS-704), refused
+ * here before the domain sees it.
+ */
+export const SetPolicyInputSchema = policy.PolicyVersionInputSchema.omit({ listingId: true })
+  .extend({ expectedRowVersion: z.number().int().min(1) })
+  .refine(
+    (p) =>
+      p.maxAutonomousConcession === undefined ||
+      p.maxAutonomousConcession.currency === p.minimumPrice.currency,
+    {
+      message: 'concession currency must equal the minimum price currency',
+      path: ['maxAutonomousConcession'],
+    },
+  );
+export type SetPolicyInput = z.input<typeof SetPolicyInputSchema>;
+
+/**
  * LIST-131 / LIST-132: a new policy version carrying the minimum price and the negotiation rules
  * becomes the listing's current policy. Audited as SELLER_POLICY_CHANGED, plus
  * MINIMUM_PRICE_CHANGED when the minimum differs from the previous version's. Neither payload
@@ -793,8 +812,13 @@ export async function readinessGaps(trx: TenantTransaction, listing: ListingReco
 
 /**
  * LIST-134: DRAFT → READY. Refused, with the missing items named, unless approved copy, an asking
- * price, a minimum price and a policy version are all present (SM-L-01). The transition is
- * audited as LISTING_STATUS_CHANGED with the policy version in force.
+ * price, a minimum price and a policy version are all present (SM-L-01). The listing row is
+ * locked, the state and the expected row version are checked, and every prerequisite is
+ * re-evaluated inside the transaction; the data-layer guard evaluates SM-L-01 once more on the
+ * write. The policy version bound is the listing's current one, set by the seller through
+ * setPolicy, never chosen by the caller. The transition is audited as LISTING_STATUS_CHANGED
+ * with that policy version in force. No access is issued and nothing is published (SM-L-02 is
+ * markListed).
  */
 export async function markReady(
   trx: TenantTransaction,
@@ -807,8 +831,9 @@ export async function markReady(
     eventType: 'LISTING_STATUS_CHANGED',
     subjectType: 'listing',
     run: async () => {
-      const listing = await getListing(trx, input.listingId);
+      const listing = await getListingForUpdate(trx, input.listingId);
       requireStatus(listing, 'DRAFT', 'become READY');
+      if (listing.rowVersion !== input.expectedRowVersion) throw new ConcurrentModificationError('listing');
       const gaps = await readinessGaps(trx, listing);
       if (gaps.length > 0) throw new ListingNotReadyError(gaps);
       const updated = await updateListingRow(trx, ctx, listing.id, input.expectedRowVersion, {
@@ -829,7 +854,12 @@ export async function markReady(
   return outcome.value;
 }
 
-/** STATE_MACHINES §1: READY → DRAFT when the seller edits (LIST-134 AC3). */
+/**
+ * STATE_MACHINES §1: READY → DRAFT when the seller edits (LIST-134 AC3). Only the status moves:
+ * the approved content pointer, the asking price, the policy version and the facts all stand, so
+ * a later READY needs no re-approval unless the seller changes them. The row is locked and the
+ * expected row version checked before the write; audited as LISTING_STATUS_CHANGED.
+ */
 export async function revertToDraft(
   trx: TenantTransaction,
   ctx: CommandContext,
@@ -841,8 +871,9 @@ export async function revertToDraft(
     eventType: 'LISTING_STATUS_CHANGED',
     subjectType: 'listing',
     run: async () => {
-      const listing = await getListing(trx, input.listingId);
+      const listing = await getListingForUpdate(trx, input.listingId);
       requireStatus(listing, 'READY', 'return to DRAFT');
+      if (listing.rowVersion !== input.expectedRowVersion) throw new ConcurrentModificationError('listing');
       const updated = await updateListingRow(trx, ctx, listing.id, input.expectedRowVersion, {
         status: 'DRAFT',
       });
