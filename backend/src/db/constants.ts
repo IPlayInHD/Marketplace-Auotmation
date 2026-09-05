@@ -70,4 +70,8 @@ export const SQLSTATE = {
   signInThrottlePolicyInvalid: 'ST001',
   /** An invalid session policy (cap or lifetimes) was passed to the keyhole (AUTH-230, D-20). */
   sessionPolicyInvalid: 'SC001',
+  /** Invalid arguments to the sign-out keyhole (migration 0010). */
+  signOutArgumentsInvalid: 'SO001',
+  /** Invalid arguments to the sign-out-all replay keyhole (migration 0010). */
+  replayArgumentsInvalid: 'SO002',
 } as const;

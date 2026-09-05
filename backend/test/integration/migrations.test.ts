@@ -34,6 +34,7 @@ describe('Migrations', { shuffle: false }, () => {
       '0007_seller_authentication.sql',
       '0008_sign_in_failure_throttle.sql',
       '0009_auth_idempotency_and_session_cap.sql',
+      '0010_sign_out_all_replay_isolation.sql',
     ]);
     expect(first.alreadyApplied).toEqual([]);
 
@@ -56,6 +57,7 @@ describe('Migrations', { shuffle: false }, () => {
       '0007_seller_authentication.sql',
       '0008_sign_in_failure_throttle.sql',
       '0009_auth_idempotency_and_session_cap.sql',
+      '0010_sign_out_all_replay_isolation.sql',
     ]);
   });
 
@@ -219,17 +221,18 @@ describe('Migrations', { shuffle: false }, () => {
     expect(keyholes.map((f) => f.name)).toEqual([
       'create_session',
       'finalize_sign_in_attempt',
-      'find_session_for_command',
       'list_account_sessions',
       'record_sign_in_event',
+      'replay_sign_out_all',
       'reserve_sign_in_attempt',
       'resolve_session',
       'revoke_account_sessions',
       'revoke_session',
       'rotate_session',
       'sign_in_lookup',
+      'sign_out_session',
     ]);
-    // One signature per keyhole: migrations 0008 and 0009 dropped the ones they replaced instead of overloading.
+    // One signature per keyhole: migrations 0008 to 0010 dropped the ones they replaced instead of overloading.
     expect(functions.map((f) => f.name)).toEqual([...new Set(functions.map((f) => f.name))]);
     for (const f of keyholes) {
       expect(f.secdef, `${f.name} SECURITY DEFINER`).toBe(true);

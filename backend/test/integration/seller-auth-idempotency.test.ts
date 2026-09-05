@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { sql } from 'kysely';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { TENANT_SETTING } from '../../src/db/constants.ts';
 import { establishTenantContext } from '../../src/db/kysely.ts';
+import type * as KyselyModule from '../../src/db/kysely.ts';
 import * as audit from '../../src/modules/audit/index.ts';
 import * as auth from '../../src/modules/identity-auth/index.ts';
 import { IDEMPOTENCY_KEY_HEADER } from '../../src/shared/command.ts';
@@ -23,6 +26,14 @@ import {
 } from '../helpers/auth.ts';
 import { startDatabase, type TestDatabase } from '../helpers/database.ts';
 import { query } from '../helpers/inspect.ts';
+
+// The one statement that creates tenant context is wrapped, unchanged in behaviour, so the tests
+// can prove which paths call it: the exact-replay path of migration 0010 never may.
+vi.mock('../../src/db/kysely.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof KyselyModule>();
+  return { ...actual, establishTenantContext: vi.fn(actual.establishTenantContext) };
+});
+const tenantContextCalls = vi.mocked(establishTenantContext);
 
 // D-20 (Accepted 2026-09-04): authentication-route idempotency semantics. The GET routes and
 // sign-in take no key; sign-in and rotation are one-time-secret exceptions with no exact-response
@@ -118,6 +129,11 @@ describe('Authentication-route idempotency semantics (D-20)', () => {
       'faulty',
       'tenant',
       'other',
+      'isolated',
+      'pool',
+      'probe',
+      'arbitrary',
+      'arbitrary2',
     ]) {
       accounts[name] = await provisionAccount(env, {
         displayName: `Synthetic Seller ${name}`,
@@ -525,6 +541,236 @@ describe('Authentication-route idempotency semantics (D-20)', () => {
     expect(ok.json()).toEqual({ revoked: 2 });
     expect(await liveCount(faulty.accountId)).toBe(0);
     expect((await post(harness, SIGN_OUT_ALL, s, withKey(key))).json()).toEqual({ revoked: 2 });
+  });
+
+  it('replays through a keyhole that establishes no tenant context and resolves no identifier, while a different key or fingerprint gets 401 or 409 without context', async () => {
+    const iso = account('isolated');
+    const s1 = remember(await signIn(harness, iso));
+    const s2 = remember(await signIn(harness, iso));
+    const key = randomUUID();
+    const otherCommandKey = randomUUID();
+    // A receipt of another command under a second key, written through the ordinary tenant path.
+    await harness.runtime.db.transaction().execute(async (trx) => {
+      await establishTenantContext(trx, iso.sellerId);
+      await audit.runIdempotent(
+        trx,
+        { sellerId: iso.sellerId, requestId: `req-${randomUUID()}`, idempotencyKey: otherCommandKey },
+        {
+          command: 'listing.set_asking_price',
+          payload: { probe: true },
+          eventType: 'LISTING_ASKING_PRICE_CHANGED',
+          subjectType: 'listing',
+          run: () => Promise.resolve({ value: { ok: true }, subjectId: randomUUID(), changed: false }),
+          serialize: () => ({ ok: true }),
+          revive: () => ({ ok: true }),
+        },
+      );
+    });
+    const first = await post(harness, SIGN_OUT_ALL, s2, withKey(key));
+    expect(first.statusCode).toBe(200);
+    expect(first.json()).toEqual({ revoked: 2 });
+    expect(await revokedAllEvents(iso.sellerId)).toHaveLength(1);
+    expect(
+      (await receipts(iso.sellerId)).filter((r) => r.command === auth.SIGN_OUT_ALL_COMMAND),
+    ).toHaveLength(1);
+
+    // Exact replay: the stored outcome, and the tenant-context construction site is never called.
+    tenantContextCalls.mockClear();
+    const replay = await post(harness, SIGN_OUT_ALL, s2, withKey(key));
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toEqual({ revoked: 2 });
+    expect(cookieOf(replay, harness.cookieName)?.value).toBe('');
+    expect(tenantContextCalls).not.toHaveBeenCalled();
+
+    // The same revoked token under a different key: generic 401, no context.
+    tenantContextCalls.mockClear();
+    const otherKey = await post(harness, SIGN_OUT_ALL, s2, withKey(randomUUID()));
+    expect(otherKey.statusCode).toBe(401);
+    expect(otherKey.json()).toEqual({ error: 'unauthenticated' });
+    expect(tenantContextCalls).not.toHaveBeenCalled();
+
+    // The same key from the other revoked session (another fingerprint): conflict, no context.
+    tenantContextCalls.mockClear();
+    const otherSession = await post(harness, SIGN_OUT_ALL, s1, withKey(key));
+    expect(otherSession.statusCode).toBe(409);
+    expect(otherSession.json()).toEqual({ error: 'idempotency_conflict' });
+    expect(tenantContextCalls).not.toHaveBeenCalled();
+
+    // The initiating token with a key consumed by another command: conflict, no context.
+    tenantContextCalls.mockClear();
+    const otherCommand = await post(harness, SIGN_OUT_ALL, s2, withKey(otherCommandKey));
+    expect(otherCommand.statusCode).toBe(409);
+    expect(tenantContextCalls).not.toHaveBeenCalled();
+
+    // The keyhole itself answers a verdict and an outcome, and nothing else.
+    const rows = await query<Record<string, unknown>>(
+      env.runtimeUrl,
+      `SELECT * FROM auth.replay_sign_out_all($1, $2)`,
+      [auth.hashSessionToken(s2.token), key],
+    );
+    expect(rows).toEqual([{ verdict: 'replay', outcome: { revoked: 2 } }]);
+    expect(Object.keys(rows[0] ?? {}).sort()).toEqual(['outcome', 'verdict']);
+    const [signature] = await query<{ args: string; result: string }>(
+      env.superuserUrl,
+      `SELECT pg_get_function_arguments(p.oid) AS args, pg_get_function_result(p.oid) AS result
+         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'auth' AND p.proname = 'replay_sign_out_all'`,
+    );
+    expect(signature).toEqual({
+      args: 'p_token_hash bytea, p_idempotency_key text',
+      result: 'TABLE(verdict text, outcome jsonb)',
+    });
+
+    // No other authenticated route accepts the revoked token; sign-out converges without mutation.
+    for (const [label, res] of [
+      ['me', await meWith(s2.token)],
+      ['sessions', await get(harness, SESSIONS, s2.token)],
+      ['rotate', await post(harness, ROTATE, s2)],
+    ] as const) {
+      expect(res.statusCode, label).toBe(401);
+    }
+    const before = await sessionRows(env.superuserUrl, iso.accountId);
+    expect((await post(harness, SIGN_OUT, s2)).statusCode).toBe(204);
+    expect(await sessionRows(env.superuserUrl, iso.accountId)).toEqual(before);
+    expect(await revokedAllEvents(iso.sellerId)).toHaveLength(1);
+  });
+
+  it('leaves no tenant setting on the connection after a replay or a fresh execution, even on a one-connection pool', async () => {
+    const pool = account('pool');
+    const one = await startAuthApp(env, { poolMax: 1, config: { maxActiveSessions: CAP } });
+    try {
+      /** What the single pooled connection sees next: the setting, the derived seller, and RLS-visible rows. */
+      const connectionState = () =>
+        one.runtime.db.transaction().execute(async (trx) => {
+          const value = await sql<{ setting: string | null; seller: string | null }>`
+            select current_setting(${TENANT_SETTING}, true) as setting, app.current_seller_id()::text as seller`.execute(
+            trx,
+          );
+          const visible = await sql<{ n: string }>`select count(*)::text as n from app.audit_event`.execute(
+            trx,
+          );
+          return {
+            setting: value.rows[0]?.setting ?? '',
+            seller: value.rows[0]?.seller ?? null,
+            visible: Number(visible.rows[0]?.n),
+          };
+        });
+      const s = remember(await signIn(one, pool));
+      remember(await signIn(one, pool));
+      const key = randomUUID();
+      const first = await post(one, SIGN_OUT_ALL, s, withKey(key));
+      expect(first.statusCode).toBe(200);
+      expect(first.json()).toEqual({ revoked: 2 });
+      expect(await connectionState()).toEqual({ setting: '', seller: null, visible: 0 });
+      tenantContextCalls.mockClear();
+      const replay = await post(one, SIGN_OUT_ALL, s, withKey(key));
+      expect(replay.statusCode).toBe(200);
+      expect(replay.json()).toEqual({ revoked: 2 });
+      expect(tenantContextCalls).not.toHaveBeenCalled();
+      expect(await connectionState()).toEqual({ setting: '', seller: null, visible: 0 });
+      // The keyhole's own transient context is gone before its statement even returns.
+      const [after] = await query<{ setting: string | null; verdict: string }>(
+        env.runtimeUrl,
+        `SELECT (SELECT verdict FROM auth.replay_sign_out_all($1, $2)) AS verdict, current_setting($3, true) AS setting`,
+        [auth.hashSessionToken(s.token), key, TENANT_SETTING],
+      );
+      expect(after?.verdict).toBe('replay');
+      expect(after?.setting ?? '').toBe('');
+    } finally {
+      await one.close();
+    }
+  });
+
+  it('answers unknown, expired, revoked and malformed tokens identically on sign-out-all, with no context and comparable timing', async () => {
+    const probe = account('probe');
+    const expired = remember(await signIn(harness, probe));
+    await idleExpire(expired.token);
+    const gone = remember(await signIn(harness, probe));
+    expect((await post(harness, SIGN_OUT, gone)).statusCode).toBe(204);
+    const unknownToken = auth.generateSessionToken();
+    const unknown: Session = { token: unknownToken, antiForgery: auth.antiForgeryTokenFor(unknownToken) };
+    const malformed: Session = { token: 'not-a-token', antiForgery: 'irrelevant' };
+    tenantContextCalls.mockClear();
+    const shapes = new Set<string>();
+    for (const [label, session] of [
+      ['unknown', unknown],
+      ['expired', expired],
+      ['revoked', gone],
+      ['malformed', malformed],
+    ] as const) {
+      const res = await post(harness, SIGN_OUT_ALL, session, withKey(randomUUID()));
+      expect(res.statusCode, label).toBe(401);
+      expect(res.json(), label).toEqual({ error: 'unauthenticated' });
+      expect(cookieOf(res, harness.cookieName)?.value, label).toBe('');
+      shapes.add(`${String(res.headers['content-type'])}|${String(res.headers['content-length'])}`);
+    }
+    expect(shapes.size).toBe(1);
+    expect(tenantContextCalls).not.toHaveBeenCalled();
+    // Bounded timing check: every path that reaches the database runs the same two keyhole calls.
+    const timed = async (session: Session) => {
+      const started = process.hrtime.bigint();
+      await post(harness, SIGN_OUT_ALL, session, withKey(randomUUID()));
+      return Number(process.hrtime.bigint() - started) / 1e6;
+    };
+    const samples = { unknown: [] as number[], expired: [] as number[], revoked: [] as number[] };
+    for (let i = 0; i < 25; i += 1) {
+      samples.unknown.push(await timed(unknown));
+      samples.expired.push(await timed(expired));
+      samples.revoked.push(await timed(gone));
+    }
+    const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] ?? 0;
+    const medians = Object.values(samples).map(median);
+    expect(Math.max(...medians) - Math.min(...medians)).toBeLessThanOrEqual(10);
+  });
+
+  it('keeps sessions and receipts out of the runtime role’s direct reach and lets the replay keyhole retrieve no arbitrary receipt', async () => {
+    const a = account('arbitrary');
+    const b = account('arbitrary2');
+    const bSession = remember(await signIn(harness, b));
+    const bKey = randomUUID();
+    expect((await post(harness, SIGN_OUT_ALL, bSession, withKey(bKey))).statusCode).toBe(200);
+    const aSession = remember(await signIn(harness, a));
+    const aKey = randomUUID();
+    expect((await post(harness, SIGN_OUT_ALL, aSession, withKey(aKey))).statusCode).toBe(200);
+    // Direct table access: sessions are unreachable; receipts and events fail closed without context.
+    await expect(query(env.runtimeUrl, `SELECT * FROM auth.seller_session`)).rejects.toMatchObject({
+      code: '42501',
+    });
+    expect(await query(env.runtimeUrl, `SELECT * FROM app.idempotency_receipt`)).toEqual([]);
+    expect(await query(env.runtimeUrl, `SELECT * FROM app.audit_event`)).toEqual([]);
+    const replay = (hash: Buffer, key: string) =>
+      query<{ verdict: string; outcome: Record<string, unknown> | null }>(
+        env.runtimeUrl,
+        `SELECT verdict, outcome FROM auth.replay_sign_out_all($1, $2)`,
+        [hash, key],
+      );
+    // An unknown digest, a digest with another seller's key, and the other way round: nothing.
+    expect(await replay(auth.hashSessionToken(auth.generateSessionToken()), aKey)).toEqual([]);
+    expect(await replay(auth.hashSessionToken(aSession.token), bKey)).toEqual([]);
+    expect(await replay(auth.hashSessionToken(bSession.token), aKey)).toEqual([]);
+    // Each seller's own initiating digest and key: exactly its own outcome.
+    expect(await replay(auth.hashSessionToken(aSession.token), aKey)).toEqual([
+      { verdict: 'replay', outcome: { revoked: 1 } },
+    ]);
+    expect(await replay(auth.hashSessionToken(bSession.token), bKey)).toEqual([
+      { verdict: 'replay', outcome: { revoked: 1 } },
+    ]);
+    // Arguments are validated; nothing is dynamic.
+    await expect(replay(Buffer.alloc(16), aKey)).rejects.toMatchObject({ code: 'SO002' });
+    await expect(replay(auth.hashSessionToken(aSession.token), 'not-a-uuid')).rejects.toMatchObject({
+      code: 'SO002',
+    });
+    await expect(
+      query(env.runtimeUrl, `SELECT * FROM auth.sign_out_session($1, 0)`, [
+        auth.hashSessionToken(aSession.token),
+      ]),
+    ).rejects.toMatchObject({ code: 'SO001' });
+    // sign_out_session answers nothing for a revoked digest and discloses nothing.
+    expect(
+      await query(env.runtimeUrl, `SELECT * FROM auth.sign_out_session($1, 3600)`, [
+        auth.hashSessionToken(aSession.token),
+      ]),
+    ).toEqual([]);
   });
 
   it('stores no protected authentication material in any receipt, in the events they reference, or in the logs', async () => {

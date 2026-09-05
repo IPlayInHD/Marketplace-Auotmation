@@ -77,7 +77,9 @@ describe('Web process', () => {
     await app.close();
   });
 
-  it('logs with fixed fields and never a connection string, an address or a token', () => {
+  it('logs with fixed fields and never a connection string, an address or a token', async () => {
+    // Independent of test order: this request alone produces the lines inspected below.
+    expect((await harness.app.inject({ method: 'GET', url: '/health' })).statusCode).toBe(200);
     const out = harness.logText();
     expect(out).toContain('"module":"web"');
     expect(out).not.toContain(env.runtimeUrl);
